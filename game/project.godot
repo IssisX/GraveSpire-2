@@ -1,0 +1,27 @@
+; Engine configuration file.
+; Godot 4.7.2 baseline.
+
+config_version=5
+
+[application]
+
+config/name="GRAVESPIRE"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7", "Mobile")
+
+[display]
+
+window/size/viewport_width=2208
+window/size/viewport_height=1840
+window/size/window_width_override=1104
+window/size/window_height_override=920
+window/stretch/mode="canvas_items"
+window/handheld/orientation=3
+
+[rendering]
+
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="mobile"
+textures/default_filters/use_nearest_mipmap_filter=false
+environment/defaults/default_clear_color=Color(0.012, 0.016, 0.019, 1)
+
