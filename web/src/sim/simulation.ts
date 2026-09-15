@@ -741,7 +741,7 @@ export class Simulation {
       applyCarryForce(held, this.carry_.x, this.carry_.y, this.carry_.z, dt);
     }
 
-    stepBodies(bodies, this.statics_, dt, this.reactions_);
+    stepBodies(bodies, this.statics_, dt, this.reactions_, this.state_.joints);
 
     // Anything that leaves the world is gone; nothing else is ever deleted.
     for (const b of bodies) {

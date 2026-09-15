@@ -301,6 +301,14 @@ export function buildLevel(scene: THREE.Scene): Level {
     k.ibeam(40, 21, y + 0.4, 10.2, "x", mats.steel);
   }
 
+  // Lever stand: the counterweight lever (lever_beam, a real rigid body
+  // pinned here by a joint, sim/world-init.ts) rides on this. No collider --
+  // the joint is what holds the beam at this exact height, not contact with
+  // a pedestal top; a solid collider here would fight it as the beam tilts.
+  // Reaches up to just under the beam's own resting underside so it still
+  // reads as the thing the beam is pivoting on.
+  k.box(0.5, 0.4, 0.5, 22, 0.2, -8, mats.steelDark, { collider: false });
+
   // catwalks
   k.box(38, 0.16, 1.6, 20, 5.68, 9.15, mats.grating, { id: "cat_n" });
   k.box(38, 0.16, 1.6, 20, 5.68, -9.15, mats.grating, { id: "cat_s" });

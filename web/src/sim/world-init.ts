@@ -1,4 +1,4 @@
-import { makeBody, type BodyDef, type BodyState } from "./bodies.ts";
+import { makeBody, type BodyDef, type BodyState, type Joint } from "./bodies.ts";
 import type {
   BreakerState,
   MemberState,
@@ -88,6 +88,31 @@ const DEBRIS: BodyDef[] = [
   // overhang to rotate it off that edge under its own weight before anyone
   // touches it. Reachable with the carrier traversed to its west limit.
   { id: "plank_well", name: "Walkway plank", material: "steel", size: [0.9, 0.08, 7.6], mass_kg: 320, at: [9.5, 0.35, 0] },
+
+  // Lever beam: pivoted at its own centre on a fixed stand (lever_stand,
+  // level.ts), not resting on anything else. Nothing holds it level except
+  // that it is exactly balanced -- load either end (any of the crates above
+  // already qualify; nothing new to carry) and real torque about the pivot
+  // tips that end to the floor and lifts the other, the same beam-corner
+  // contact that stops it there as stops any other body at the ground.
+  { id: "lever_beam", name: "Counterweight lever", material: "steel", size: [7.0, 0.3, 0.6], mass_kg: 260, at: [22, 0.55, -8] },
+];
+
+/**
+ * Joints: bodies linked by a pivot, rope, or pulley instead of only contact.
+ * `lever_pivot` pins the lever beam's own centre to a fixed point matching
+ * where it was seeded -- a ball-socket, not a locked single-axis hinge (see
+ * bodies.ts's declared reduction); nothing here ever pushes it sideways, so
+ * that difference never shows.
+ */
+const JOINTS: Joint[] = [
+  {
+    id: "lever_pivot",
+    kind: "point",
+    force_n: 0,
+    a: { bodyId: "lever_beam", point: [0, 0, 0] },
+    b: { bodyId: null, point: [22, 0.55, -8] },
+  },
 ];
 
 export function createInitialState(): WorldState {
@@ -198,6 +223,7 @@ export function createInitialState(): WorldState {
 
   return {
     bodies: DEBRIS.map(makeBody),
+    joints: JOINTS.map((j) => ({ ...j })),
     freight: {
       height_m: 2.2,
       lateral_m: -1.8,

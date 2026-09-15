@@ -18,6 +18,10 @@ import {
   makeBody,
   stepBodies,
   type StaticBox,
+  type BodyState,
+  type DistanceJoint,
+  type PointJoint,
+  type PulleyJoint,
 } from "@/sim/bodies.ts";
 import { Gait } from "@/game/gait.ts";
 import { ContextResolver, eyePose, type Interactable } from "@/game/context.ts";
@@ -42,6 +46,19 @@ function group(name: string): void {
 
 function tick(sim: Simulation, n: number): void {
   for (let i = 0; i < n; i++) sim.advanceAuthorityTick();
+}
+
+/** World-space position of a body's local anchor point, via its quaternion. */
+function anchorWorld(b: BodyState, lx: number, ly: number, lz: number): [number, number, number] {
+  const { qx, qy, qz, qw } = b;
+  const tx = 2 * (qy * lz - qz * ly);
+  const ty = 2 * (qz * lx - qx * lz);
+  const tz = 2 * (qx * ly - qy * lx);
+  return [
+    b.px + lx + qw * tx + (qy * tz - qz * ty),
+    b.py + ly + qw * ty + (qz * tx - qx * tz),
+    b.pz + lz + qw * tz + (qx * ty - qy * tx),
+  ];
 }
 
 /** Release the fail-safe brake, which requires live control power. */
@@ -625,6 +642,111 @@ group("debris persists and stays useful");
     Math.abs(rb.px - restedAt.x) < 1e-9 && Math.abs(rb.py - restedAt.y) < 1e-9,
   );
   check("and its orientation", Math.abs(rb.qw - beam.qw) < 1e-12);
+}
+
+// ---------------------------------------------------------------------------
+group("joints: pivots, ropes, and pulleys");
+{
+  // A physical pendulum: a beam pinned at one end to a fixed point.
+  const beam = makeBody({ id: "pendulum", name: "pendulum", material: "steel", size: [0.2, 2.0, 0.2], mass_kg: 40, at: [3, 5, 0], yaw: 1.4 });
+  const pivotWorld: [number, number, number] = [3, 5, 0];
+  const pivot: PointJoint = {
+    id: "pivot", kind: "point", force_n: 0,
+    a: { bodyId: beam.id, point: [0, 1.0, 0] },
+    b: { bodyId: null, point: pivotWorld },
+  };
+  const r1 = new Map<string, number>();
+  for (let i = 0; i < 900; i++) stepBodies([beam], [], 1 / 120, r1, [pivot]);
+  const anchor = anchorWorld(beam, 0, 1.0, 0);
+  const anchorErr = Math.hypot(anchor[0] - pivotWorld[0], anchor[1] - pivotWorld[1], anchor[2] - pivotWorld[2]);
+  check("a pinned pendulum's pivot point stays coincident with its fixed anchor", anchorErr < 0.01, `error=${anchorErr.toFixed(5)} m`);
+  check("and it settles hanging below the pivot, not orbiting or diverging", beam.py < pivotWorld[1] - 0.5 && Math.hypot(beam.vx, beam.vy, beam.vz) < 0.05);
+
+  // A symmetric beam pinned at its own centre: unloaded it is genuinely
+  // balanced (no tipping rule holds it level); load one end and real torque
+  // about the pivot tips it -- the pin resists translation, not rotation.
+  const seesaw = makeBody({ id: "seesaw", name: "seesaw", material: "steel", size: [6.0, 0.2, 1.0], mass_kg: 200, at: [0, 2, 0] });
+  const centrePivot: PointJoint = {
+    id: "seesaw_pivot", kind: "point", force_n: 0,
+    a: { bodyId: seesaw.id, point: [0, 0, 0] },
+    b: { bodyId: null, point: [0, 2, 0] },
+  };
+  const load = makeBody({ id: "load", name: "load", material: "steel", size: [0.5, 0.5, 0.5], mass_kg: 150, at: [2.6, 2.35, 0] });
+  const r2 = new Map<string, number>();
+  for (let i = 0; i < 600; i++) stepBodies([seesaw, load], [], 1 / 120, r2, [centrePivot]);
+  const loadedEnd = anchorWorld(seesaw, 3, 0, 0)[1];
+  const farEnd = anchorWorld(seesaw, -3, 0, 0)[1];
+  check(
+    "no tipping rule was written, only torque about a fixed pivot: the loaded end drops",
+    loadedEnd < farEnd - 0.5,
+    `loaded end=${loadedEnd.toFixed(2)} m, far end=${farEnd.toFixed(2)} m`,
+  );
+
+  // A rope: slack (zero force) under its rest length, engages once taut, and
+  // does not let a fixed-anchored body fall past that length.
+  const bucket = makeBody({ id: "bucket", name: "bucket", material: "steel", size: [0.4, 0.4, 0.4], mass_kg: 20, at: [0, 10, 0] });
+  const rope: DistanceJoint = {
+    id: "rope", kind: "distance", force_n: 0, jAcc: 0,
+    a: { bodyId: null, point: [0, 10, 0] }, b: { bodyId: bucket.id, point: [0, 0, 0] },
+    restLength: 3.0, mode: "rope",
+  };
+  const r3 = new Map<string, number>();
+  let sawSlack = false;
+  for (let i = 0; i < 200; i++) {
+    stepBodies([bucket], [], 1 / 120, r3, [rope]);
+    if (i === 5) sawSlack = rope.force_n === 0 && bucket.vy < -0.3;
+  }
+  check("a slack rope applies zero force and the body free-falls under it", sawSlack);
+  check("the rope catches the fall at its rest length, not past it", 10 - bucket.py <= 3.05, `drop=${(10 - bucket.py).toFixed(3)} m (rest=3.0 m)`);
+
+  // A pulley: two segments through one fixed point, coupled only by their
+  // length sum -- not an authored lift ratio.
+  const heavy = makeBody({ id: "heavy", name: "heavy", material: "steel", size: [0.5, 0.5, 0.5], mass_kg: 400, at: [-2, 4, 0] });
+  const light = makeBody({ id: "light", name: "light", material: "steel", size: [0.5, 0.5, 0.5], mass_kg: 80, at: [2, 4, 0] });
+  const pulleyPoint: [number, number, number] = [0, 8, 0];
+  const startLen =
+    Math.hypot(heavy.px - pulleyPoint[0], heavy.py - pulleyPoint[1]) +
+    Math.hypot(light.px - pulleyPoint[0], light.py - pulleyPoint[1]);
+  const pulley: PulleyJoint = {
+    id: "hoist_pulley", kind: "pulley", force_n: 0, jAcc: 0,
+    a: { bodyId: heavy.id, point: [0, 0, 0] }, pulleyPoint, b: { bodyId: light.id, point: [0, 0, 0] },
+    totalLength: startLen, mode: "rod",
+  };
+  const r4 = new Map<string, number>();
+  for (let i = 0; i < 300; i++) stepBodies([heavy, light], [], 1 / 120, r4, [pulley]);
+  check("the heavier side of a pulley descends and the lighter side is pulled up", heavy.py < 4 - 0.3 && light.py > 4 + 0.3);
+  const endLen =
+    Math.hypot(heavy.px - pulleyPoint[0], heavy.py - pulleyPoint[1]) +
+    Math.hypot(light.px - pulleyPoint[0], light.py - pulleyPoint[1]);
+  check("total rope length through the pulley is conserved, not an authored ratio", Math.abs(endLen - startLen) < 0.05, `${endLen.toFixed(3)} m vs ${startLen.toFixed(3)} m`);
+}
+
+// ---------------------------------------------------------------------------
+group("the counterweight lever is a real obstacle, not a scripted one");
+{
+  const sim = new Simulation();
+  sim.setStatics([{ id: "floor_sw", minx: 0, maxx: 42, miny: -0.5, maxy: 0, minz: -11.5, maxz: -3.5 }]);
+  tick(sim, 180);
+  const lever = sim.body("lever_beam")!;
+  check("unloaded, it rests level -- genuinely balanced, not held level by a rule", lever.sleeping && Math.abs(lever.wz) < 1e-6);
+
+  // Drop an already-liftable crate onto the lever's +x end from clear of its
+  // surface (an overlapping start pops the beam with a spurious impulse --
+  // that would be a test-setup bug, not the solver's).
+  const crate = sim.body("crate_a")!;
+  crate.px = 25.3; crate.py = 1.4; crate.pz = -8;
+  crate.vx = 0; crate.vy = 0; crate.vz = 0; crate.wx = 0; crate.wy = 0; crate.wz = 0;
+  crate.sleeping = false; crate.restT = 0;
+  tick(sim, 240);
+
+  const loadedEnd = anchorWorld(lever, 3.3, 0, 0)[1];
+  const farEnd = anchorWorld(lever, -3.3, 0, 0)[1];
+  check(
+    "a body dropped on one end tips that end to the floor and lifts the other",
+    loadedEnd < 0.3 && loadedEnd < farEnd - 0.3,
+    `loaded end=${loadedEnd.toFixed(2)} m, far end=${farEnd.toFixed(2)} m`,
+  );
+  check("the pivot itself never moved -- it took the load, not the joint failing", Math.hypot(lever.px - 22, lever.py - 0.55, lever.pz + 8) < 0.05);
 }
 
 console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${checks - failures}/${checks} authority reference checks`);

@@ -171,9 +171,73 @@ fixes it for every resting collider, not just bodies.
 
 Declared reduction: contact is corner-point-against-box, not a general
 convex solver (edge-on-edge contact between two tilted boxes is
-approximated by whichever corners penetrate), there is no joint/constraint
-system yet (no hinges, no pulleys, no rope-as-body), and nothing here
-deforms or fractures.
+approximated by whichever corners penetrate), and nothing here deforms or
+fractures.
+
+Fixed alongside the well crossing: a moving body landing on a *sleeping* one
+generated a contact but the reaction was discarded (only the awake side ever
+received the impulse), so the sleeping body sat inert as if fixed to the
+world instead of being disturbed. A crate dropped onto a resting mechanism
+never woke it. Contact-building now wakes the sleeping side the moment a real
+hit is found; two bodies already settled against each other are both asleep
+already, so that path is never reached and a resting stack still sleeps.
+
+## Joints (`web/src/sim/bodies.ts`)
+
+Contact alone answers resting, stacking, tipping, dragging, bridging — free
+bodies pushed apart by non-penetration. It cannot answer a beam pinned to a
+fixed point, a rope that goes taut and catches a fall, or two loads coupled
+through a pulley so one's descent is the other's lift. Those need an
+*equality* constraint, not just contact's one-sided "don't overlap" — the
+gap the file's own declared reduction used to name directly: "no
+joint/constraint system yet."
+
+Three joint kinds, solved in the *same* sequential-impulse sweep as contact,
+by the *same* effective-mass math (`invMassAlong`, shared by both) — a joint
+is not a second solver bolted on, it is one more constraint shape the
+existing one already knows how to converge:
+
+- **`point`** — a ball-socket: two anchor points (each on a body, or fixed in
+  the world when `bodyId` is null) held coincident on all three axes. A lever
+  is a beam with one of these pinned to a fixed point at its own centre;
+  nothing scripts which way it tips — placing mass on one end creates real
+  torque about the pivot, exactly like a body tipping off a contact edge.
+  Declared reduction: it is a pin, not a true single-axis hinge — nothing
+  locks rotation to one plane. For a symmetric beam under gravity alone, with
+  no lateral force ever applied, that is indistinguishable from a hinge;
+  a twisting load would expose the difference, and none is built here.
+- **`distance`** — a link between two anchors. `mode: "rope"` resists
+  stretching past `restLength` and carries zero force slack, like an actual
+  rope; `mode: "rod"` is bilateral, a rigid link. An optional `motor` drives
+  `restLength` toward a target at a bounded rate and force — a winch.
+- **`pulley`** — two rope segments sharing one fixed total length through a
+  fixed point. The coupling is the constraint's own geometry (each segment's
+  own direction), not an authored ratio: lengthening one segment shortens the
+  other because the one thing held constant is their length sum.
+
+Two bodies linked by a joint are one mechanical system for sleep: waking one
+wakes the other every tick (a lever's far end cannot freeze mid-swing just
+because it alone read as settled), and a joint whose dynamic sides are both
+asleep is skipped from solving, same as a settled contact.
+
+**Shipped on it:** `lever_beam` — a 260 kg beam pinned at its own centre to a
+fixed stand in Bay 07 (`lever_pivot`, `x=22, z=-8`), resting level with
+nothing on it because it is genuinely balanced, not held level by a rule.
+Any of the existing liftable crates set on one end tips that end to the
+floor and lifts the other — verified end to end against the real
+`Simulation` (drop `crate_a` from clear of the beam, not already overlapping
+it — an overlapping start pops the beam with a spurious impulse that is a
+test-setup bug, not a solver one). The pivot stand itself is render-only
+(`{ collider: false }` in `level.ts`): the joint is what holds the beam at
+that height, and a solid collider at the same point would fight it as the
+beam tilts.
+
+**Not built on it, left as sized next steps:** a rope-and-pulley
+counterweight lift (two bodies coupled through a fixed point, one side's
+descent driven by loading the other) and a winch-driven gate or drawbridge
+(a `distance` joint's `motor` paying a rope in or out at a bounded force).
+Both are data — a `Joint` entry and, for the winch, a driving command — not
+new solver code; the joint primitive above is what both would be built from.
 
 ## Contextual interaction
 
@@ -246,12 +310,21 @@ what a player can see, and every one of them can fail:
   complete at the start and the act will not close on an undecided drive;
 - gait offsets stay bounded and vanish entirely at intensity 0;
 - a distant machine is identifiable but not actionable, and line of sight is
-  enforced.
+  enforced;
+- a pinned pendulum's pivot holds and it settles hanging, not orbiting;
+- a beam pinned at its centre balances until loaded, then tips from real
+  torque about the pivot, not a rule;
+- a rope is slack (zero force) under its rest length and catches a fall at
+  it, not past it;
+- a pulley conserves the rope's total length through the fixed point rather
+  than applying an authored lift ratio;
+- the counterweight lever obstacle tips under a dropped load and its pivot
+  holds.
 
 ## Verified here
 
 - `npm run typecheck` — clean.
-- `npm test` — 81/81 authority reference checks.
+- `npm test` — 91/91 authority reference checks.
 - `npm run build` — production bundle emitted.
 - `make test` — native C++ reference cases still pass, unchanged.
 - Headless Chromium against the production build: boot → menu → settings →
@@ -302,3 +375,9 @@ that overlaps this pass's work.
 - APK install and WebView behaviour on a physical device.
 - Fold/unfold ergonomics in hand.
 - Rendered image quality on a real GPU. The headless runs use SwiftShader.
+- The lever obstacle's render/walk path in a live browser specifically. It
+  goes through the exact same generic mesh-sync (`bodyMeshes.sync`) and
+  collider-sync code the well-bridging pass already verified live in Chromium
+  for a resting body's quaternion and AABB — nothing about a joint-driven
+  body is different there, it is still just a `BodyState` — but that
+  specific combination was not re-driven through a browser this pass.

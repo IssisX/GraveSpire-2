@@ -55,7 +55,7 @@ export type Act =
   | { type: "mark_save_used" }
   | { type: "end_act" };
 
-import type { BodyState } from "./bodies.ts";
+import type { BodyState, Joint } from "./bodies.ts";
 
 export interface FreightState {
   height_m: number;
@@ -201,6 +201,8 @@ export interface SimEvent {
 export interface WorldState {
   /** Movable mass with contact. Authoritative, persistent, and never expires. */
   bodies: BodyState[];
+  /** Bodies linked by pivots, ropes, and pulleys -- levers, lifts, winches. */
+  joints: Joint[];
   freight: FreightState;
   frame: FrameState;
   gate: GateState;

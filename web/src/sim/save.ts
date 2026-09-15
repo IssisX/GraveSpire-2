@@ -81,6 +81,10 @@ export function migrate(raw: SaveBlob): SaveBlob {
   if (!Array.isArray(save.authority.cables)) save.authority.cables = [];
   if (!Array.isArray(save.authority.npcs)) save.authority.npcs = base.npcs;
   if (!Array.isArray(save.authority.events)) save.authority.events = [];
+  // A save from before joints existed has no mechanism to restore -- give it
+  // the level's own joints (matching the fresh-world defaults), not an empty
+  // list, so a lever added after that save was written is not simply absent.
+  if (!Array.isArray(save.authority.joints)) save.authority.joints = base.joints;
 
   save.version = SAVE_VERSION;
   return save;

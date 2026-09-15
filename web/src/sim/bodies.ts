@@ -12,12 +12,27 @@
  * flag". A beam laid across a gap is walkable because its contact volume is a
  * contact volume; a block becomes a counterweight because it has weight.
  *
+ * Bodies can also be linked by joints: point (ball-socket pivot), distance
+ * (rope or rigid rod), and pulley (two rope segments sharing one fixed total
+ * length through a fixed point). These are constraints solved in the same
+ * sequential-impulse sweep as contact, by the same effective-mass math --
+ * a lever is a beam with a point joint at a fixed pivot, a counterweight lift
+ * is two bodies linked by a pulley joint, a winch is a distance joint with a
+ * motor. None of that is a named mechanic either: it is the same solver
+ * finding the same kind of answer for one more shape of constraint.
+ *
  * DECLARED REDUCTION. Contacts are generated from box corner points against
  * oriented boxes and against the world's axis-aligned static colliders. That is
  * enough for resting, stacking, tipping, sliding, wedging and bridging. It is
  * not a general convex solver: edge-on-edge contact between two tilted boxes is
  * approximated by whichever corners are penetrating, and no body deforms. This
- * file does not model fracture.
+ * file does not model fracture. A point joint is a ball-socket, not a true
+ * hinge: it holds one point of each side coincident but leaves all rotation
+ * free, so nothing here locks a single swing axis or enforces a joint's angular
+ * limits. For a beam pivoting under gravity alone, with no lateral force ever
+ * applied, that is indistinguishable from a hinge -- nothing pushes it out of
+ * the vertical plane through the pivot. A twisting or off-axis load would
+ * expose the difference; that case is not built or claimed here.
  */
 
 import { G, clamp } from "./types.ts";
@@ -89,6 +104,72 @@ export interface StaticBox {
 
 /** Normal reaction delivered into each static collider this tick, in newtons. */
 export type SupportReactions = Map<string, number>;
+
+/**
+ * One end of a joint: a point fixed in another body's local frame, or -- when
+ * `bodyId` is null -- a point fixed in the world (a pivot pin, a pulley wheel
+ * bolted to the structure). By id and resolved at solve time, like every
+ * other cross-reference in world state (`freight.hooked_body`, and so on) --
+ * not a live object reference, which a save round trip through JSON would
+ * silently turn into a disconnected copy nothing else reads or writes.
+ */
+export interface JointAnchor {
+  bodyId: string | null;
+  /** Body-local space when `bodyId` is set; world space when it is null. */
+  point: [number, number, number];
+}
+
+interface JointCommon {
+  id: string;
+  /** Constraint force magnitude delivered last solve, N. Diagnostic. */
+  force_n: number;
+}
+
+/** Ball-socket pivot: see the file header for what this does and does not lock. */
+export interface PointJoint extends JointCommon {
+  kind: "point";
+  a: JointAnchor;
+  b: JointAnchor;
+}
+
+/**
+ * A link between two anchors. `mode: "rope"` resists stretching past
+ * `restLength` and goes slack (zero force) under it, like an actual rope.
+ * `mode: "rod"` is bilateral: a rigid link that resists both stretch and
+ * compression. A `motor` drives `restLength` toward a target at a bounded
+ * rate and force -- a winch paying a line in or out.
+ */
+export interface DistanceJoint extends JointCommon {
+  kind: "distance";
+  a: JointAnchor;
+  b: JointAnchor;
+  restLength: number;
+  mode: "rope" | "rod";
+  motor?: { targetLength: number; rate_mps: number; maxForce_n: number };
+  /** Accumulated constraint impulse this tick's solve. Runtime scratch. */
+  jAcc: number;
+}
+
+/**
+ * Two rope segments sharing one fixed total length through a fixed pulley
+ * point. This is an actual constraint, not a force multiplier: lengthening
+ * one segment shortens the other by the same amount because the one scalar
+ * held constant is their length sum, and the impulse enforcing it is
+ * distributed to both bodies by the constraint's own geometry (each
+ * segment's own direction), not by an authored ratio.
+ */
+export interface PulleyJoint extends JointCommon {
+  kind: "pulley";
+  a: JointAnchor;
+  pulleyPoint: [number, number, number];
+  b: JointAnchor;
+  totalLength: number;
+  mode: "rope" | "rod";
+  motor?: { targetLength: number; rate_mps: number; maxForce_n: number };
+  jAcc: number;
+}
+
+export type Joint = PointJoint | DistanceJoint | PulleyJoint;
 
 const FRICTION: Record<BodyMaterial, number> = {
   steel: 0.42,
@@ -397,6 +478,46 @@ function applyImpulse(b: BodyState, jx: number, jy: number, jz: number, rx: numb
 }
 
 /**
+ * Effective inverse mass of `b` along direction n at offset r from its
+ * centre -- linear plus the angular contribution an impulse there produces.
+ * Zero for a fixed anchor (`b` null) or a kinematically hook-driven body:
+ * both are infinite-mass from the solver's point of view, the same way the
+ * contact solver already treats a hooked body as immovable.
+ */
+function invMassAlong(
+  b: BodyState | null,
+  rx: number,
+  ry: number,
+  rz: number,
+  nx: number,
+  ny: number,
+  nz: number,
+): number {
+  if (!b || b.attached === "hook") return 0;
+  let inv = 1 / b.mass_kg;
+  const cx = ry * nz - rz * ny;
+  const cy = rz * nx - rx * nz;
+  const cz = rx * ny - ry * nx;
+  const [ix, iy, iz] = applyInvInertia(b, cx, cy, cz);
+  inv += (iy * rz - iz * ry) * nx + (iz * rx - ix * rz) * ny + (ix * ry - iy * rx) * nz;
+  return inv;
+}
+
+/** Apply an impulse to `b` unless it is a fixed anchor or hook-driven. */
+function applyImpulseIfMovable(
+  b: BodyState | null,
+  jx: number,
+  jy: number,
+  jz: number,
+  rx: number,
+  ry: number,
+  rz: number,
+): void {
+  if (!b || b.attached === "hook") return;
+  applyImpulse(b, jx, jy, jz, rx, ry, rz);
+}
+
+/**
  * What a person can put into an object with their hands and a bar, in newtons.
  *
  * This single number is the whole carry/drag/machinery ladder. A 26 kg crate
@@ -454,6 +575,167 @@ export function applyCarryForce(
   b.wz *= s;
 }
 
+/* ----------------------------------------------------------------- joints -- */
+
+const AXES: ReadonlyArray<readonly [number, number, number]> = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+
+/** Body-id lookup used to resolve joint anchors each solve. Built once per tick. */
+type BodyLookup = ReadonlyMap<string, BodyState>;
+
+function resolveAnchorBody(byId: BodyLookup, bodyId: string | null): BodyState | null {
+  return bodyId ? (byId.get(bodyId) ?? null) : null;
+}
+
+function worldAnchorPoint(b: BodyState | null, local: readonly [number, number, number]): [number, number, number] {
+  if (!b) return [local[0], local[1], local[2]];
+  const [x, y, z] = rotate(b, local[0], local[1], local[2]);
+  return [b.px + x, b.py + y, b.pz + z];
+}
+
+function bodyOffset(b: BodyState | null, wx: number, wy: number, wz: number): [number, number, number] {
+  return b ? [wx - b.px, wy - b.py, wz - b.pz] : [0, 0, 0];
+}
+
+function anchorVelocity(b: BodyState | null, rx: number, ry: number, rz: number): [number, number, number] {
+  return b ? velocityAt(b, rx, ry, rz) : [0, 0, 0];
+}
+
+/**
+ * True once both dynamic sides of a joint are asleep (a fixed anchor counts
+ * as permanently settled on its own). A settled mechanism does not need
+ * continuous solving any more than a settled contact does.
+ */
+function jointSettled(j: Joint, byId: BodyLookup): boolean {
+  const ab = resolveAnchorBody(byId, j.a.bodyId);
+  const bb = resolveAnchorBody(byId, j.b.bodyId);
+  return (!ab || ab.sleeping) && (!bb || bb.sleeping);
+}
+
+/**
+ * Three orthogonal unclamped impulses that drive the two anchor points
+ * coincident -- a full 3D point constraint solved as three 1D ones, the same
+ * simplification the contact solver already makes by iterating instead of
+ * inverting a matrix. `bias` pulls the position error closed at the same
+ * Baumgarte rate contact penetration is.
+ */
+function solvePointJoint(j: PointJoint, dt: number, byId: BodyLookup): void {
+  const ab = resolveAnchorBody(byId, j.a.bodyId);
+  const bb = resolveAnchorBody(byId, j.b.bodyId);
+  const pa = worldAnchorPoint(ab, j.a.point);
+  const pb = worldAnchorPoint(bb, j.b.point);
+  const [arx, ary, arz] = bodyOffset(ab, pa[0], pa[1], pa[2]);
+  const [brx, bry, brz] = bodyOffset(bb, pb[0], pb[1], pb[2]);
+  let totalImpulse = 0;
+  for (const [nx, ny, nz] of AXES) {
+    const errN = (pb[0] - pa[0]) * nx + (pb[1] - pa[1]) * ny + (pb[2] - pa[2]) * nz;
+    const [avx, avy, avz] = anchorVelocity(ab, arx, ary, arz);
+    const [bvx, bvy, bvz] = anchorVelocity(bb, brx, bry, brz);
+    const vn = (avx - bvx) * nx + (avy - bvy) * ny + (avz - bvz) * nz;
+    const eff = invMassAlong(ab, arx, ary, arz, nx, ny, nz) + invMassAlong(bb, brx, bry, brz, nx, ny, nz);
+    if (eff <= 1e-9) continue;
+    const target = (BAUMGARTE * errN) / dt;
+    const jImp = (target - vn) / eff;
+    applyImpulseIfMovable(ab, nx * jImp, ny * jImp, nz * jImp, arx, ary, arz);
+    applyImpulseIfMovable(bb, -nx * jImp, -ny * jImp, -nz * jImp, brx, bry, brz);
+    totalImpulse += Math.abs(jImp);
+  }
+  j.force_n = totalImpulse / dt;
+}
+
+/** Drives `restLength` toward `motor.targetLength` at a bounded rate. */
+function stepMotorLength(restLength: number, motor: { targetLength: number; rate_mps: number }, dt: number): number {
+  const delta = motor.targetLength - restLength;
+  const step = motor.rate_mps * dt;
+  return Math.abs(delta) <= step ? motor.targetLength : restLength + Math.sign(delta) * step;
+}
+
+function solveDistanceJoint(j: DistanceJoint, dt: number, byId: BodyLookup): void {
+  const ab = resolveAnchorBody(byId, j.a.bodyId);
+  const bb = resolveAnchorBody(byId, j.b.bodyId);
+  const pa = worldAnchorPoint(ab, j.a.point);
+  const pb = worldAnchorPoint(bb, j.b.point);
+  const dx = pb[0] - pa[0], dy = pb[1] - pa[1], dz = pb[2] - pa[2];
+  const len = Math.hypot(dx, dy, dz);
+  if (len < 1e-6) { j.jAcc = 0; j.force_n = 0; return; }
+  const nx = dx / len, ny = dy / len, nz = dz / len;
+
+  if (j.motor) j.restLength = stepMotorLength(j.restLength, j.motor, dt);
+
+  const err = len - j.restLength;
+  if (j.mode === "rope" && err <= 0) { j.jAcc = 0; j.force_n = 0; return; }
+
+  const [arx, ary, arz] = bodyOffset(ab, pa[0], pa[1], pa[2]);
+  const [brx, bry, brz] = bodyOffset(bb, pb[0], pb[1], pb[2]);
+  const [avx, avy, avz] = anchorVelocity(ab, arx, ary, arz);
+  const [bvx, bvy, bvz] = anchorVelocity(bb, brx, bry, brz);
+  const vn = (bvx - avx) * nx + (bvy - avy) * ny + (bvz - avz) * nz;
+
+  const eff = invMassAlong(ab, arx, ary, arz, nx, ny, nz) + invMassAlong(bb, brx, bry, brz, nx, ny, nz);
+  if (eff <= 1e-9) return;
+
+  const bias = (BAUMGARTE * err) / dt;
+  const want = (vn + bias) / eff;
+  const maxImpulse = (j.motor?.maxForce_n ?? Infinity) * dt;
+  const prev = j.jAcc;
+  j.jAcc = j.mode === "rope" ? clamp(prev + want, 0, maxImpulse) : clamp(prev + want, -maxImpulse, maxImpulse);
+  const jImp = j.jAcc - prev;
+  j.force_n = Math.abs(j.jAcc) / dt;
+  if (jImp === 0) return;
+  applyImpulseIfMovable(ab, nx * jImp, ny * jImp, nz * jImp, arx, ary, arz);
+  applyImpulseIfMovable(bb, -nx * jImp, -ny * jImp, -nz * jImp, brx, bry, brz);
+}
+
+function solvePulleyJoint(j: PulleyJoint, dt: number, byId: BodyLookup): void {
+  const ab = resolveAnchorBody(byId, j.a.bodyId);
+  const bb = resolveAnchorBody(byId, j.b.bodyId);
+  const pa = worldAnchorPoint(ab, j.a.point);
+  const pb = worldAnchorPoint(bb, j.b.point);
+  const pulley = j.pulleyPoint;
+
+  const dax = pa[0] - pulley[0], day = pa[1] - pulley[1], daz = pa[2] - pulley[2];
+  const lenA = Math.hypot(dax, day, daz);
+  const dbx = pb[0] - pulley[0], dby = pb[1] - pulley[1], dbz = pb[2] - pulley[2];
+  const lenB = Math.hypot(dbx, dby, dbz);
+  if (lenA < 1e-6 || lenB < 1e-6) { j.jAcc = 0; j.force_n = 0; return; }
+  const nax = dax / lenA, nay = day / lenA, naz = daz / lenA;
+  const nbx = dbx / lenB, nby = dby / lenB, nbz = dbz / lenB;
+
+  if (j.motor) j.totalLength = stepMotorLength(j.totalLength, j.motor, dt);
+
+  const err = lenA + lenB - j.totalLength;
+  if (j.mode === "rope" && err <= 0) { j.jAcc = 0; j.force_n = 0; return; }
+
+  const [arx, ary, arz] = bodyOffset(ab, pa[0], pa[1], pa[2]);
+  const [brx, bry, brz] = bodyOffset(bb, pb[0], pb[1], pb[2]);
+  const [avx, avy, avz] = anchorVelocity(ab, arx, ary, arz);
+  const [bvx, bvy, bvz] = anchorVelocity(bb, brx, bry, brz);
+  // Rate the total rope length (both segments) is growing: each anchor's
+  // velocity component along its own segment's own direction, summed.
+  const vn = avx * nax + avy * nay + avz * naz + bvx * nbx + bvy * nby + bvz * nbz;
+
+  const eff = invMassAlong(ab, arx, ary, arz, nax, nay, naz) + invMassAlong(bb, brx, bry, brz, nbx, nby, nbz);
+  if (eff <= 1e-9) return;
+
+  const bias = (BAUMGARTE * err) / dt;
+  const want = (vn + bias) / eff;
+  const maxImpulse = (j.motor?.maxForce_n ?? Infinity) * dt;
+  const prev = j.jAcc;
+  j.jAcc = j.mode === "rope" ? clamp(prev + want, 0, maxImpulse) : clamp(prev + want, -maxImpulse, maxImpulse);
+  const jImp = j.jAcc - prev;
+  j.force_n = Math.abs(j.jAcc) / dt;
+  if (jImp === 0) return;
+  // Reeling in (jImp > 0) pulls each end toward the pulley, i.e. against its
+  // own outward direction -- shortening both segments by the same impulse.
+  applyImpulseIfMovable(ab, -nax * jImp, -nay * jImp, -naz * jImp, arx, ary, arz);
+  applyImpulseIfMovable(bb, -nbx * jImp, -nby * jImp, -nbz * jImp, brx, bry, brz);
+}
+
+function solveJoint(j: Joint, dt: number, byId: BodyLookup): void {
+  if (j.kind === "point") solvePointJoint(j, dt, byId);
+  else if (j.kind === "distance") solveDistanceJoint(j, dt, byId);
+  else solvePulleyJoint(j, dt, byId);
+}
+
 /**
  * Advance every body one substep and resolve contact.
  *
@@ -466,8 +748,23 @@ export function stepBodies(
   statics: StaticBox[],
   dt: number,
   reactions: SupportReactions,
+  joints: Joint[] = [],
 ): void {
   if (bodies.length === 0) return;
+
+  const byId: BodyLookup = new Map(bodies.map((b) => [b.id, b] as const));
+
+  // ---- joint wake propagation ---------------------------------------------
+  // Two bodies linked by a joint are one mechanical system for sleep
+  // purposes: a lever's far end must not freeze mid-swing just because it
+  // alone was under the sleep threshold. A fixed anchor (null bodyId) never
+  // forces a wake and is never woken -- it has no state to wake.
+  for (const j of joints) {
+    const ab = resolveAnchorBody(byId, j.a.bodyId);
+    const bb = resolveAnchorBody(byId, j.b.bodyId);
+    if (ab && !ab.sleeping && bb?.sleeping) { bb.sleeping = false; bb.restT = 0; }
+    if (bb && !bb.sleeping && ab?.sleeping) { ab.sleeping = false; ab.restT = 0; }
+  }
 
   // ---- integrate velocities ----------------------------------------------
   for (const b of bodies) {
@@ -528,6 +825,13 @@ export function stepBodies(
         const cx = corners[c * 3]!, cy = corners[c * 3 + 1]!, cz = corners[c * 3 + 2]!;
         const hit = pointInBody(o, cx, cy, cz);
         if (!hit) continue;
+        // A moving body landing on a sleeping one is a real disturbance, not
+        // continued rest: wake it so the impulse below actually reaches it
+        // instead of being computed against a phantom immovable mass and
+        // discarded. Two bodies already settled against each other are both
+        // asleep already, so neither side of THAT contact ever reaches this
+        // branch -- a resting stack still sleeps.
+        if (o.sleeping) { o.sleeping = false; o.restT = 0; }
         const arx1 = cx - b.px, ary1 = cy - b.py, arz1 = cz - b.pz;
         const orx1 = cx - o.px, ory1 = cy - o.py, orz1 = cz - o.pz;
         const [rvx1, rvy1, rvz1] = relativeVelocityAt(b, o, 0, 0, 0, arx1, ary1, arz1, orx1, ory1, orz1);
@@ -545,8 +849,17 @@ export function stepBodies(
     }
   }
 
+  // Fresh accumulator each tick's solve, exactly like a contact's `jn: 0` at
+  // build time -- joints persist across ticks, contacts don't, so this reset
+  // has to happen explicitly instead of falling out of rebuilding the array.
+  for (const j of joints) {
+    if (j.kind !== "point") j.jAcc = 0;
+  }
+  const activeJoints = joints.filter((j) => !jointSettled(j, byId));
+
   // ---- sequential impulses -------------------------------------------------
   for (let iter = 0; iter < SOLVER_ITERATIONS; iter++) {
+    for (const j of activeJoints) solveJoint(j, dt, byId);
     for (const k of contacts) {
       const a = k.a;
       const o = k.other;
@@ -564,23 +877,10 @@ export function stepBodies(
       const vn = rvx * k.nx + rvy * k.ny + rvz * k.nz;
 
       // Effective mass along the normal, including the angular term. This is
-      // what makes an impulse at the edge of a body rotate it.
-      let effInv = 1 / a.mass_kg;
-      {
-        const cx = ary * k.nz - arz * k.ny;
-        const cy = arz * k.nx - arx * k.nz;
-        const cz = arx * k.ny - ary * k.nx;
-        const [ix, iy, iz] = applyInvInertia(a, cx, cy, cz);
-        effInv += (iy * arz - iz * ary) * k.nx + (iz * arx - ix * arz) * k.ny + (ix * ary - iy * arx) * k.nz;
-      }
-      if (o && o.attached !== "hook") {
-        effInv += 1 / o.mass_kg;
-        const cx = ory * k.nz - orz * k.ny;
-        const cy = orz * k.nx - orx * k.nz;
-        const cz = orx * k.ny - ory * k.nx;
-        const [ix, iy, iz] = applyInvInertia(o, cx, cy, cz);
-        effInv += (iy * orz - iz * ory) * k.nx + (iz * orx - ix * orz) * k.ny + (ix * ory - iy * orx) * k.nz;
-      }
+      // what makes an impulse at the edge of a body rotate it. Shared with
+      // the joint solver below -- a contact and a joint constraint are the
+      // same effective-mass problem along a different direction.
+      const effInv = invMassAlong(a, arx, ary, arz, k.nx, k.ny, k.nz) + (o ? invMassAlong(o, orx, ory, orz, k.nx, k.ny, k.nz) : 0);
       if (effInv <= 1e-9) continue;
 
       const bias = (BAUMGARTE * Math.max(0, k.depth - SLOP)) / dt;
