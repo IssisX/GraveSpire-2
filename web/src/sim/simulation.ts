@@ -37,6 +37,8 @@ import {
   toggleTransferBrake,
 } from "./rube-mechanics.ts";
 import { toggleUpperBrake } from "./upper-cascade.ts";
+import { ensureLinkedCascadeState } from "./linked-cascade.ts";
+import { nudgeCompositionBody } from "./composition-bodies.ts";
 
 const kFrameMassKg = 48000.0;
 const kFrameBaseStiffnessNpm = 7.5e6;
@@ -106,6 +108,12 @@ export class Simulation {
 
   active(command: Command): boolean {
     return this.commands_[COMMANDS.indexOf(command)] ?? false;
+  }
+
+  /** Player/body contact enters the same mechanical authority as every machine. */
+  nudgeComposition(colliderId: string, impulseXNs: number): boolean {
+    const rube = ensureRubeState(this.state_);
+    return nudgeCompositionBody(ensureLinkedCascadeState(rube), colliderId, impulseXNs);
   }
 
   act(action: Act): string {
