@@ -7,6 +7,12 @@ import {
   stepMechanicalNetwork,
   type GeneralizedForces,
 } from "./mechanical-network.ts";
+import {
+  applySpringShuttleForces,
+  enforceSpringShuttleContact,
+  ensureSpringShuttleState,
+  springShuttleEnergy,
+} from "./spring-shuttle.ts";
 
 export const CHAIN = {
   z: -36.0,
@@ -98,7 +104,7 @@ function createNetwork(): MechanicalNetworkState {
 }
 
 export function createLinkedCascadeState(): LinkedCascadeState {
-  return {
+  const state: LinkedCascadeState = {
     network: createNetwork(),
     transfer_brake_engaged: true,
     transfer_brake_capacity_n: CHAIN.transferBrakeCapacityN,
@@ -110,10 +116,13 @@ export function createLinkedCascadeState(): LinkedCascadeState {
     kinetic_j: 0,
     potential_j: 0,
   };
+  ensureSpringShuttleState(state);
+  return state;
 }
 
 export function ensureLinkedCascadeState(rube: RubeState): LinkedCascadeState {
   if (!rube.chain) rube.chain = createLinkedCascadeState();
+  ensureSpringShuttleState(rube.chain);
   return rube.chain;
 }
 
@@ -146,17 +155,20 @@ function updateEnergy(chain: LinkedCascadeState): void {
   const bridge = mechDof(chain.network, "bridge");
   const cwHeight = CHAIN.counterweightStartY - cw.q;
   const bridgeComHeight = CHAIN.bridgePivotY + 0.5 * CHAIN.bridgeLengthM * Math.sin(bridge.q);
+  const shuttle = springShuttleEnergy(chain);
   chain.kinetic_j = kinetic;
   chain.potential_j =
     CHAIN.counterweightMassKg * G * cwHeight +
-    CHAIN.bridgeMassKg * G * bridgeComHeight;
+    CHAIN.bridgeMassKg * G * bridgeComHeight +
+    shuttle.springJ +
+    shuttle.gravitationalJ;
 }
 
 /**
- * Advances MC-02/MC-03 from generalized coordinates and constraint forces.
+ * Advances MC-02/MC-03/MC-04 from shared generalized coordinates and physical contacts.
  * There are no completion flags: lift contact moves the rocker, cable retracts the pawl,
  * gravity drops the counterweight, rope pulls the carriage, carriage contact rotates the
- * second release, and gravity lowers the bridge when its pawl is geometrically clear.
+ * second release, gravity lowers the bridge, and the bridge nose retracts the MC-04 pawl.
  */
 export function stepLinkedCascade(rube: RubeState, dt: number, entryContactN: number): void {
   const chain = ensureLinkedCascadeState(rube);
@@ -168,6 +180,7 @@ export function stepLinkedCascade(rube: RubeState, dt: number, entryContactN: nu
   const release = mechDof(net, "bridge_release");
   const bridgePawl = mechDof(net, "bridge_pawl");
   const bridge = mechDof(net, "bridge");
+  const springShuttle = mechDof(net, "spring_shuttle");
 
   const forces: GeneralizedForces = {};
   addGeneralizedForce(forces, "entry_rocker", entryContactN * CHAIN.entryRockerArmM);
@@ -195,10 +208,12 @@ export function stepLinkedCascade(rube: RubeState, dt: number, entryContactN: nu
     "bridge",
     -CHAIN.bridgeMassKg * G * (CHAIN.bridgeLengthM * 0.5) * Math.cos(bridge.q),
   );
+  applySpringShuttleForces(chain, forces);
 
   const beforeCarriageQ = carriage.q;
   const beforeCounterweightQ = counterweight.q;
   const beforeBridgeQ = bridge.q;
+  const beforeSpringShuttleQ = springShuttle.q;
   stepMechanicalNetwork(net, dt, forces);
 
   const transfer = mechCable(net, "transfer_rope");
@@ -235,6 +250,7 @@ export function stepLinkedCascade(rube: RubeState, dt: number, entryContactN: nu
     if (bridge.v < 0) bridge.v = 0;
   }
 
+  enforceSpringShuttleContact(chain, beforeSpringShuttleQ);
   updateEnergy(chain);
 }
 
