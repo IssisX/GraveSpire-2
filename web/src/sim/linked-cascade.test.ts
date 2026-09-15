@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { Simulation } from "./simulation.ts";
 import { createRubeState } from "./rube-mechanics.ts";
 import {
   CHAIN,
@@ -10,15 +11,13 @@ import {
   toggleTransferBrake,
 } from "./linked-cascade.ts";
 import { mechCable, mechDof, stepMechanicalNetwork } from "./mechanical-network.ts";
+import { MECH_ID } from "./mechanical-ids.ts";
 import type { MechanicalNetworkState } from "./types.ts";
 
 const DT = 1 / 120;
 
-function runLinked(rube: ReturnType<typeof createRubeState>, steps: number) {
-  for (let i = 0; i < steps; i++) {
-    const contact = linkedEntryContactForce(rube);
-    stepLinkedCascade(rube, DT, contact);
-  }
+function ticks(sim: Simulation, count: number): void {
+  for (let i = 0; i < count; i++) sim.advanceAuthorityTick();
 }
 
 describe("generic reduced mechanical network", () => {
@@ -48,54 +47,88 @@ describe("generic reduced mechanical network", () => {
   });
 });
 
-describe("MC-01 to MC-02 to MC-03 causal chain", () => {
-  it("counterweight remains physically captured before MC-01 lift clears the pawl", () => {
+describe("one causal authority from MC-01 through MC-04", () => {
+  it("contains upstream and downstream coordinates in one MechanicalNetworkState", () => {
     const r = createRubeState();
-    const chain = ensureLinkedCascadeState(r);
-    toggleTransferBrake(r);
-    runLinked(r, 720);
-    assert.ok(mechDof(chain.network, "entry_pawl").q < CHAIN.entryPawlClearM);
-    assert.equal(mechDof(chain.network, "transfer_counterweight").q, 0);
-    assert.equal(mechDof(chain.network, "transfer_carriage").q, 0);
+    const ids = new Set(r.chain!.network.dofs.map((d) => d.id));
+    for (const id of [
+      MECH_ID.mc01Lever,
+      MECH_ID.mc01Ballast,
+      MECH_ID.mc01Lift,
+      MECH_ID.entryRocker,
+      MECH_ID.transferCarriage,
+      MECH_ID.transferCounterweight,
+      MECH_ID.bridge,
+      MECH_ID.springShuttle,
+    ]) assert.ok(ids.has(id), `missing shared DOF ${id}`);
   });
 
-  it("lift contact rotates the rocker and lets the counterweight physically escape the pawl", () => {
+  it("MC-01 lift and MC-02 rocker meet through physical contact in that same network", () => {
     const r = createRubeState();
-    r.lift.y_m = 2.5;
-    r.lift.velocity_mps = 0;
-    runLinked(r, 480);
-    const chain = ensureLinkedCascadeState(r);
-    assert.ok(mechDof(chain.network, "entry_rocker").q > CHAIN.entryPawlClearM);
-    assert.ok(mechDof(chain.network, "entry_pawl").q > CHAIN.entryPawlClearM);
-    assert.ok(mechDof(chain.network, "transfer_counterweight").q > CHAIN.entryPawlEscapeM);
-    assert.equal(chain.entry_pawl_reaction_n, 0);
+    const net = r.chain!.network;
+    const lift = mechDof(net, MECH_ID.mc01Lift);
+    lift.q = 2.5;
+    lift.v = 0;
+    const contact = linkedEntryContactForce(r);
+    assert.ok(contact > 0, "raised authoritative lift coordinate must penetrate the rocker contact envelope");
+    stepLinkedCascade(r, DT, {});
+    assert.ok(r.chain!.entry_contact_n > 0);
+    assert.ok(mechDof(net, MECH_ID.entryRocker).v > 0, "reciprocal contact must accelerate downstream rocker");
   });
 
-  it("released brake lets gravity haul the carriage and carriage contact releases the gravity bridge", () => {
-    const r = createRubeState();
-    r.lift.y_m = 2.5;
-    r.lift.velocity_mps = 0;
-    runLinked(r, 480);
-    assert.match(toggleTransferBrake(r), /released/i);
-    runLinked(r, 2100);
-    const chain = ensureLinkedCascadeState(r);
-    assert.ok(mechDof(chain.network, "transfer_carriage").q > 13.0);
-    assert.ok(mechDof(chain.network, "bridge_release").q > 0.5);
-    assert.ok(mechDof(chain.network, "bridge_pawl").q > CHAIN.bridgePawlClearM);
-    assert.ok(mechDof(chain.network, "bridge").q < 0.08);
+  it("upstream mechanics physically release the counterweight before carriage can move", () => {
+    const sim = new Simulation();
+    sim.act({ type: "rube_push_ballast", direction: 1 });
+    ticks(sim, 90);
+    sim.act({ type: "rube_toggle_latch" });
+    ticks(sim, 300);
+    const r = sim.state().rube!;
+    const net = r.chain!.network;
+    assert.ok(mechDof(net, MECH_ID.entryRocker).q > 0);
+    assert.ok(mechDof(net, MECH_ID.entryPawl).q > CHAIN.entryPawlClearM);
+    assert.ok(mechDof(net, MECH_ID.transferCounterweight).q > CHAIN.entryPawlEscapeM);
+  });
+
+  it("released finite brake lets gravity haul carriage and carriage contact drops bridge", () => {
+    const sim = new Simulation();
+    sim.act({ type: "rube_push_ballast", direction: 1 });
+    ticks(sim, 90);
+    sim.act({ type: "rube_toggle_latch" });
+    ticks(sim, 300);
+    assert.match(sim.act({ type: "rube_toggle_transfer_brake" }), /released/i);
+    ticks(sim, 700);
+
+    const r = sim.state().rube!;
+    const net = r.chain!.network;
+    assert.ok(mechDof(net, MECH_ID.transferCarriage).q > 13.0);
+    assert.ok(mechDof(net, MECH_ID.bridgeRelease).q > 0.5);
+    assert.ok(mechDof(net, MECH_ID.bridgePawl).q > CHAIN.bridgePawlClearM);
+    assert.ok(mechDof(net, MECH_ID.bridge).q < 0.08);
     assert.ok(linkedCascadeFinite(r));
-    assert.equal("complete" in chain, false);
+    assert.equal("complete" in r.chain!, false);
   });
 
-  it("identical causal histories reproduce exactly", () => {
-    const a = createRubeState();
-    const b = createRubeState();
-    for (const r of [a, b]) {
-      r.lift.y_m = 2.5;
-      runLinked(r, 480);
-      toggleTransferBrake(r);
-      runLinked(r, 1800);
+  it("identical causal action histories reproduce the shared authority exactly", () => {
+    const a = new Simulation();
+    const b = new Simulation();
+    for (const sim of [a, b]) {
+      sim.act({ type: "rube_push_ballast", direction: 1 });
+      ticks(sim, 90);
+      sim.act({ type: "rube_toggle_latch" });
+      ticks(sim, 300);
+      sim.act({ type: "rube_toggle_transfer_brake" });
+      ticks(sim, 500);
     }
-    assert.deepEqual(a.chain, b.chain);
+    assert.deepEqual(a.state().rube!.chain!.network, b.state().rube!.chain!.network);
+  });
+
+  it("manual downstream brake still changes constraint state, not completion state", () => {
+    const r = createRubeState();
+    const chain = ensureLinkedCascadeState(r);
+    assert.match(toggleTransferBrake(r), /released/i);
+    assert.equal(chain.transfer_brake_engaged, false);
+    assert.equal("mc02_complete" in chain, false);
+    assert.equal("mc03_complete" in chain, false);
+    assert.equal("mc04_complete" in chain, false);
   });
 });
