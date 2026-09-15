@@ -109,13 +109,13 @@ function ensureRubeWorld(level: Level): RubeBindings {
   addBox(level, root, 17.0, 0.55, 0.8, 58, 8.6, -40.5, mats.steel, undefined, false);
   addBox(level, root, 17.0, 0.55, 0.8, 58, 8.6, -22.7, mats.steel, undefined, false);
 
-  // Upper route: the lift can physically deliver the player to this deck.
-  addBox(level, root, 5.2, 0.28, 9.0, 64.0, 4.44, -36.0, mats.grating, "cascade_upper_deck");
-  addBox(level, root, 0.16, 1.05, 9.0, 66.5, 5.0, -36.0, mats.steel, "cascade_upper_rail");
-  addBox(level, root, 5.2, 0.18, 0.35, 64.0, 4.68, -40.25, mats.hazard, undefined, false);
+  // The 1:1 routed cable has ~2 m useful stroke; land the lift on a physically reachable deck.
+  addBox(level, root, 5.2, 0.28, 9.0, 64.0, 2.36, -36.0, mats.grating, "cascade_upper_deck");
+  addBox(level, root, 0.16, 1.05, 9.0, 66.5, 3.0, -36.0, mats.steel, "cascade_upper_rail");
+  addBox(level, root, 5.2, 0.18, 0.35, 64.0, 2.60, -40.25, mats.hazard, undefined, false);
   // A visibly interrupted continuation makes this the first machine, not the end of the world.
-  addBox(level, root, 3.2, 0.32, 0.5, 61.1, 4.4, -40.2, mats.rust, undefined, false).rotation.z = -0.18;
-  addBox(level, root, 2.8, 0.32, 0.5, 66.1, 4.1, -40.2, mats.rust, undefined, false).rotation.z = 0.24;
+  addBox(level, root, 3.2, 0.32, 0.5, 61.1, 2.32, -40.2, mats.rust, undefined, false).rotation.z = -0.18;
+  addBox(level, root, 2.8, 0.32, 0.5, 66.1, 2.08, -40.2, mats.rust, undefined, false).rotation.z = 0.24;
 
   // Small approach step: lower lift surface remains ordinary collision, not a teleport trigger.
   addBox(level, root, 3.2, 0.24, 1.1, CASCADE.liftX, 0.12, -29.65, mats.diamond, "cascade_lift_step");
