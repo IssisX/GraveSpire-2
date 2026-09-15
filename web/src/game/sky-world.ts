@@ -5,6 +5,7 @@ import { mc11World, mc12World, SKY } from "@/sim/sky-spine.ts";
 import type { Collider } from "./collision.ts";
 import type { Interactable, Level } from "./level.ts";
 import { makeSignTexture } from "./materials.ts";
+import { applyCompositionWorld } from "./composition-world.ts";
 
 type SkyBindings = {
   root: THREE.Group;
@@ -85,7 +86,7 @@ function ensureWorld(level: Level): SkyBindings {
     addBox(level, root, 0.34, 39.0, 0.34, x, 111.0, SKY.z + 2.4, mats.steelDark, undefined, false);
   }
 
-  // 420 m² wind sail and drum.
+  // Building-scale ~1,100 m² effective wind sail and drum.
   const sail = new THREE.Group();
   sail.position.set(SKY.sailPivotX, SKY.sailPivotY, SKY.z);
   const mast = new THREE.Mesh(geo(level, new THREE.CylinderGeometry(0.48, 0.48, 17.0, 12)), mats.steelDark);
@@ -143,6 +144,11 @@ function ensureWorld(level: Level): SkyBindings {
   addBox(level, root, 16.0, 0.30, 5.0, 314.0, SKY.bridgeY - 0.15, SKY.z, mats.grating, "mc12_sky_landing");
   addBox(level, root, 0.32, 18.0, 0.32, 321.0, 141.0, SKY.z - 2.3, mats.steelDark, undefined, false);
   addBox(level, root, 0.32, 18.0, 0.32, 321.0, 141.0, SKY.z + 2.3, mats.steelDark, undefined, false);
+
+  // Physical parachute re-entry shelves: no rescue detector, just reachable steel.
+  addBox(level, root, 8.0, 0.24, 3.0, 242.0, 78.0, SKY.z + 5.0, mats.grating, "sky_reentry_78");
+  addBox(level, root, 7.0, 0.24, 3.0, 266.0, 111.0, SKY.z - 5.2, mats.grating, "sky_reentry_111");
+  addBox(level, root, 8.0, 0.24, 3.0, 286.0, 120.0, SKY.z + 5.4, mats.grating, "sky_reentry_120");
 
   addInteract(level, { id: "mc11_sail", label: "High-altitude wind sail", x: SKY.sailPivotX + 5, y: SKY.sailPivotY, z: SKY.z, r: 5.5, kind: "machine" });
   addInteract(level, { id: "mc11_sky_car", label: "38 t windward sky-car", x: SKY.skyCarX, y: SKY.skyCarBaseY, z: SKY.z, r: 4.0, kind: "world" });
@@ -202,14 +208,24 @@ export function applySkyWorldCoupling(level: Level, sim: Simulation): void {
   const bridgeIt = level.interactables.find((x) => x.id === "mc12_bridge");
   if (bridgeIt) bridgeIt.x = SKY.bridgeX + 0.5 * w12.bridge.q;
 
-  // Sparse high-altitude life: distant vultures circle on deterministic phase offsets.
+  // The birds react to real nearby machinery instead of following a scripted scare trigger.
+  const disturbance = Math.min(
+    1,
+    Math.abs(w12.pendulum.omega) * 0.9 + Math.abs(w12.bridge.vx) * 0.18 + Math.abs(w11.sail.omega) * 0.35,
+  );
   const t = performance.now() * 0.00016;
   for (let i = 0; i < b.vultures.length; i++) {
-    const a = t * (0.72 + i * 0.08) + i * 2.2;
-    const radius = 18 + i * 7;
+    const a = t * (0.72 + i * 0.08 + disturbance * 0.22) + i * 2.2;
+    const radius = 18 + i * 7 + disturbance * 10;
     const bird = b.vultures[i]!;
-    bird.position.set(285 + Math.cos(a) * radius, 142 + i * 6 + Math.sin(a * 1.7) * 2.2, SKY.z - 12 + Math.sin(a) * radius * 0.35);
+    bird.position.set(
+      285 + Math.cos(a) * radius,
+      142 + i * 6 + disturbance * 8 + Math.sin(a * 1.7) * (2.2 + disturbance * 2.5),
+      SKY.z - 12 + Math.sin(a) * radius * 0.35,
+    );
     bird.rotation.y = -a + Math.PI / 2;
-    bird.rotation.z = Math.sin(a * 2.1) * 0.12;
+    bird.rotation.z = Math.sin(a * (2.1 + disturbance)) * (0.12 + disturbance * 0.18);
   }
+
+  applyCompositionWorld(level, sim);
 }
