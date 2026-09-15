@@ -13,6 +13,8 @@ export class GameAudio {
   gateGain: GainNode | null = null;
   brakeGain: GainNode | null = null;
   windGain: GainNode | null = null;
+  cableOsc: OscillatorNode | null = null;
+  cableGain: GainNode | null = null;
   footT = 0;
   muted = false;
   private altitudeHooked = false;
@@ -110,6 +112,22 @@ export class GameAudio {
     this.steamSrc = steam?.src ?? null;
     this.windGain = this.noiseLoop(0, 90, 1800)?.gain ?? null;
 
+    const cable = this.ctx.createOscillator();
+    cable.type = "sine";
+    cable.frequency.value = 120;
+    const cg = this.ctx.createGain();
+    cg.gain.value = 0;
+    const cf = this.ctx.createBiquadFilter();
+    cf.type = "bandpass";
+    cf.Q.value = 7;
+    cf.frequency.value = 260;
+    cable.connect(cf);
+    cf.connect(cg);
+    cg.connect(this.amb);
+    cable.start();
+    this.cableOsc = cable;
+    this.cableGain = cg;
+
     const buzz = this.ctx.createOscillator();
     buzz.type = "square";
     buzz.frequency.value = 60;
@@ -155,6 +173,15 @@ export class GameAudio {
     if (!this.ctx || !this.windGain) return;
     const target = Math.max(0, Math.min(1, amount)) * (chute ? 0.11 : 0.085);
     this.windGain.gain.setTargetAtTime(target, this.ctx.currentTime, chute ? 0.08 : 0.35);
+  }
+  setCableSing(tensionScale: number, motion: number) {
+    if (!this.ctx || !this.cableOsc || !this.cableGain) return;
+    const t = this.ctx.currentTime;
+    const load = Math.max(0, Math.min(1.5, tensionScale));
+    const movement = Math.max(0, Math.min(1, motion));
+    this.cableOsc.frequency.setTargetAtTime(105 + load * 250 + movement * 42, t, 0.18);
+    const audible = load > 0.15 ? (0.004 + load * 0.017) * (0.25 + movement * 0.75) : 0;
+    this.cableGain.gain.setTargetAtTime(audible, t, 0.28);
   }
 
   beep(freq: number, dur = 0.08, vol = 0.08) {
