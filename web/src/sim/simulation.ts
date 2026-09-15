@@ -36,6 +36,7 @@ import {
   toggleRubeLatch,
   toggleTransferBrake,
 } from "./rube-mechanics.ts";
+import { toggleUpperBrake } from "./upper-cascade.ts";
 
 const kFrameMassKg = 48000.0;
 const kFrameBaseStiffnessNpm = 7.5e6;
@@ -81,6 +82,10 @@ export class Simulation {
           ? "Carrier brake engaged."
           : "Carrier brake released.",
       );
+    } else if (command === "BasculeBrake" && enabled) {
+      this.push(toggleUpperBrake(ensureRubeState(this.state_), "mc05"));
+    } else if (command === "RotorBrake" && enabled) {
+      this.push(toggleUpperBrake(ensureRubeState(this.state_), "mc06"));
     } else if (command === "FrameBrace" && enabled) {
       this.state_.frame.brace_connected = true;
       this.state_.frame.brace_stiffness_npm = 4.0e6;
@@ -154,9 +159,7 @@ export class Simulation {
           s.freight.cargo_damaged = true;
           this.push("Release from height. Cargo took the hit.");
         }
-        if (!s.freight.brake_engaged) {
-          this.push("Released without brake. Deck took an impulse.");
-        }
+        if (!s.freight.brake_engaged) this.push("Released without brake. Deck took an impulse.");
         s.freight.payload_released = true;
         s.freight.payload_kg = 420;
         if (
@@ -219,22 +222,13 @@ export class Simulation {
         return "Drive abandoned.";
       }
       case "sling": {
-        if (s.cables.some((c) => c.id === "sling")) {
-          return "A working sling is already on. Clear it first.";
-        }
+        if (s.cables.some((c) => c.id === "sling")) return "A working sling is already on. Clear it first.";
         if (!slingCompatible(action.a, action.b)) {
           return "Those attachments are not a load path. Carrier, dock, frame, or a live member.";
         }
         const rest = slingRestLength(s, action.a, action.b);
         if (rest == null) return "No geometry for that sling.";
-        s.cables.push({
-          id: "sling",
-          a: action.a,
-          b: action.b,
-          rest_length_m: rest,
-          tension_n: 0,
-          slack: true,
-        });
+        s.cables.push({ id: "sling", a: action.a, b: action.b, rest_length_m: rest, tension_n: 0, slack: true });
         this.push(`Sling committed ${action.a} → ${action.b}. Tension-only from this pose.`);
         return "Sling committed.";
       }
@@ -263,9 +257,7 @@ export class Simulation {
         return "Bench used.";
       }
       case "end_act": {
-        if (!s.flags.drive_recovered && !s.flags.drive_abandoned) {
-          return "The drive is still a choice.";
-        }
+        if (!s.flags.drive_recovered && !s.flags.drive_abandoned) return "The drive is still a choice.";
         s.flags.act_ended = true;
         this.push("Act I closed. The building was not reset.");
         return "Ended.";
@@ -277,9 +269,7 @@ export class Simulation {
 
   advanceAuthorityTick(): void {
     const before = cloneState(this.state_);
-    for (let i = 0; i < SUBSTEPS; i++) {
-      this.stepMechanics(MECHANICS_DT);
-    }
+    for (let i = 0; i < SUBSTEPS; i++) this.stepMechanics(MECHANICS_DT);
     this.state_.authority_tick += 1;
     this.state_.sim_time_s = this.state_.authority_tick * AUTHORITY_DT;
     this.commitElectrical();
@@ -301,11 +291,8 @@ export class Simulation {
     const gate = this.state_.gate;
     const elec = this.state_.electrical;
 
-    const liftAxis =
-      Number(this.active("CarrierRaise")) - Number(this.active("CarrierLower"));
-    const traverseAxis =
-      Number(this.active("CarrierRight")) - Number(this.active("CarrierLeft"));
-
+    const liftAxis = Number(this.active("CarrierRaise")) - Number(this.active("CarrierLower"));
+    const traverseAxis = Number(this.active("CarrierRight")) - Number(this.active("CarrierLeft"));
     const power = elec.carrier_powered ? 1 : 0.12;
     const liftAccel = 1.35 * liftAxis * power;
     freight.vertical_velocity_mps += liftAccel * dt;
@@ -314,10 +301,7 @@ export class Simulation {
     if (freight.brake_engaged && liftAxis === 0) {
       const before = freight.vertical_velocity_mps;
       freight.vertical_velocity_mps *= Math.exp(-9.0 * dt);
-      const dissipated =
-        0.5 *
-        freight.payload_kg *
-        (before * before - freight.vertical_velocity_mps * freight.vertical_velocity_mps);
+      const dissipated = 0.5 * freight.payload_kg * (before * before - freight.vertical_velocity_mps * freight.vertical_velocity_mps);
       freight.brake_temperature_k += Math.max(0, dissipated) / 18000.0;
     }
     freight.lateral_velocity_mps *= Math.exp(-1.8 * dt);
@@ -329,9 +313,7 @@ export class Simulation {
     const cableExtension = Math.max(0, 0.018 + 0.12 * elasticLen);
     freight.cable_tension_n = Math.max(
       0,
-      freight.payload_kg * (G + liftAccel) +
-        kCableStiffnessNpm * cableExtension +
-        kCableDampingNsPm * frame.velocity_mps,
+      freight.payload_kg * (G + liftAccel) + kCableStiffnessNpm * cableExtension + kCableDampingNsPm * frame.velocity_mps,
     );
 
     if (this.active("GateVent")) {
@@ -341,8 +323,7 @@ export class Simulation {
     }
 
     const gateAxis = Number(this.active("GateOpen")) - Number(this.active("GateClose"));
-    const pressureTorque =
-      gate.pressure_pa * kGateAreaM2 * kGatePressureArmM * Math.max(0.12, Math.cos(gate.angle_rad));
+    const pressureTorque = gate.pressure_pa * kGateAreaM2 * kGatePressureArmM * Math.max(0.12, Math.cos(gate.angle_rad));
     const misalignment = Math.abs(gate.seal_misalignment_m);
     const jamMultiplier = 1.0 + 24.0 * misalignment;
     const voltage = elec.gate_powered ? clamp(elec.voltage_process / 480, 0.15, 1.15) : 0;
@@ -354,10 +335,7 @@ export class Simulation {
     const gateTorque = driveTorque - pressureTorque - 1.1e5 * gate.angular_velocity_radps;
     gate.angular_velocity_radps += (gateTorque / kGateInertiaKgM2) * dt;
     gate.angle_rad = clamp(gate.angle_rad + gate.angular_velocity_radps * dt, 0.0, 1.42);
-    if (
-      (gate.angle_rad === 0.0 && gate.angular_velocity_radps < 0.0) ||
-      (gate.angle_rad === 1.42 && gate.angular_velocity_radps > 0.0)
-    ) {
+    if ((gate.angle_rad === 0.0 && gate.angular_velocity_radps < 0.0) || (gate.angle_rad === 1.42 && gate.angular_velocity_radps > 0.0)) {
       gate.angular_velocity_radps = 0.0;
     }
 
@@ -376,29 +354,23 @@ export class Simulation {
     const lever = mechLateral(freight.lateral_m);
     const offsetFactor = 1 + 0.4 * Math.abs(lever);
     const ontoNeck = dockShare(freight.lateral_m);
-    const stiffness =
-      kFrameBaseStiffnessNpm * (1.0 - 0.28 * frame.damage) + frame.brace_stiffness_npm;
+    const stiffness = kFrameBaseStiffnessNpm * (1.0 - 0.28 * frame.damage) + frame.brace_stiffness_npm;
     const frameForce =
       (0.42 + 0.28 * ontoNeck) * offsetFactor * carrierForce +
-      0.09 * gateForce +
-      jackForce -
-      slingForce * 0.35 -
-      stiffness * (frame.deflection_m - frame.plastic_set_m) -
-      kFrameDampingNsPm * frame.velocity_mps;
+      0.09 * gateForce + jackForce - slingForce * 0.35 -
+      stiffness * (frame.deflection_m - frame.plastic_set_m) - kFrameDampingNsPm * frame.velocity_mps;
     frame.velocity_mps += (frameForce / kFrameMassKg) * dt;
     frame.deflection_m += frame.velocity_mps * dt;
 
     const torsionMoment = carrierForce * lever + gateForce * 1.65;
     const torsionAccel =
-      (torsionMoment - kFrameTorsionNmPrad * frame.twist_rad - kFrameTorsionDamping * frame.angular_velocity_radps) /
-      8.5e6;
+      (torsionMoment - kFrameTorsionNmPrad * frame.twist_rad - kFrameTorsionDamping * frame.angular_velocity_radps) / 8.5e6;
     frame.angular_velocity_radps += torsionAccel * dt;
     frame.twist_rad += frame.angular_velocity_radps * dt;
 
     const elasticDeflection = frame.deflection_m - frame.plastic_set_m;
     if (Math.abs(elasticDeflection) > kYieldDeflectionM) {
-      frame.plastic_set_m =
-        frame.deflection_m - Math.sign(elasticDeflection) * kYieldDeflectionM;
+      frame.plastic_set_m = frame.deflection_m - Math.sign(elasticDeflection) * kYieldDeflectionM;
     }
     const nextDamage = clamp01(Math.abs(frame.plastic_set_m) / 0.12);
     if (nextDamage > frame.damage + 0.08 && frame.damage < 0.08) {
@@ -409,7 +381,12 @@ export class Simulation {
     gate.seal_misalignment_m = 0.62 * frame.deflection_m + 0.85 * frame.twist_rad;
     freight.brake_temperature_k += (293.15 - freight.brake_temperature_k) * 0.035 * dt;
 
-    stepRubeMechanics(ensureRubeState(this.state_), dt);
+    stepRubeMechanics(ensureRubeState(this.state_), dt, {
+      basculeBallastAxis: Number(this.active("BasculeBallastOut")) - Number(this.active("BasculeBallastIn")),
+      basculeTableAxis: Number(this.active("BasculeTableEast")) - Number(this.active("BasculeTableWest")),
+      rotorBridgeAxis: Number(this.active("RotorBridgeOut")) - Number(this.active("RotorBridgeIn")),
+      drivePower: clamp(elec.voltage_process / 480, 0, 1.1),
+    });
     this.state_.mechanics_step += 1;
   }
 
@@ -427,32 +404,22 @@ export class Simulation {
       const F = total * (k / sumK);
       m.force_n = F;
       const elastic = F / k;
-      if (elastic > m.yield_sag_m) {
-        m.plastic_set_m = Math.max(m.plastic_set_m, elastic - m.yield_sag_m);
-      }
+      if (elastic > m.yield_sag_m) m.plastic_set_m = Math.max(m.plastic_set_m, elastic - m.yield_sag_m);
       m.sag_m = Math.max(elastic, m.plastic_set_m);
       m.moment_y_nm = F * (m.length_m / 8);
       m.moment_z_nm = F * 0.12;
       m.torsion_nm = F * 0.35;
-      m.twist_rad = m.torsion_nm / (2.8e6);
+      m.twist_rad = m.torsion_nm / 2.8e6;
       m.damage = Math.max(m.damage, clamp01((m.sag_m - m.yield_sag_m) / 0.16));
     });
     for (const m of this.state_.members) {
       if (m.role !== "gallery_span") {
-        if (m.cut) {
-          m.force_n = 0;
-          continue;
-        }
+        if (m.cut) { m.force_n = 0; continue; }
         const k = m.k_npm * (m.braced ? 1.65 : 1) * (m.jacked ? 1.25 : 1);
-        const share =
-          m.role === "neck_brace"
-            ? 0.18 * this.state_.freight.cable_tension_n + this.state_.gate.pressure_pa * 0.002
-            : 4200;
+        const share = m.role === "neck_brace" ? 0.18 * this.state_.freight.cable_tension_n + this.state_.gate.pressure_pa * 0.002 : 4200;
         m.force_n = share;
         const elastic = share / k;
-        if (elastic > m.yield_sag_m) {
-          m.plastic_set_m = Math.max(m.plastic_set_m, elastic - m.yield_sag_m);
-        }
+        if (elastic > m.yield_sag_m) m.plastic_set_m = Math.max(m.plastic_set_m, elastic - m.yield_sag_m);
         m.sag_m = Math.max(elastic, m.plastic_set_m);
         m.moment_y_nm = share * 0.4;
         m.moment_z_nm = share * 0.18;
@@ -469,11 +436,7 @@ export class Simulation {
     const gen = Boolean(br("brk_gen")?.closed) && !br("brk_gen")?.tripped;
     e.process_isolated = !gen;
     const processBus = gen;
-    const driveCab =
-      processBus &&
-      Boolean(br("brk_drive")?.closed) &&
-      this.state_.flags.drive_present &&
-      !br("brk_drive")?.tripped;
+    const driveCab = processBus && Boolean(br("brk_drive")?.closed) && this.state_.flags.drive_present && !br("brk_drive")?.tripped;
     const gateFeed = processBus && Boolean(br("brk_gate")?.closed);
     const habViaDrive = driveCab && Boolean(br("brk_hab")?.closed);
     const habWest = e.chen_rerouted && processBus && Boolean(br("brk_west")?.closed);
@@ -500,11 +463,7 @@ export class Simulation {
     const f = this.state_.freight;
     if (this.state_.flags.payload_on_neck) return;
     if (f.payload_released) return;
-    if (
-      overDock(f) &&
-      f.brake_engaged &&
-      Math.abs(f.vertical_velocity_mps) < 0.12
-    ) {
+    if (overDock(f) && f.brake_engaged && Math.abs(f.vertical_velocity_mps) < 0.12) {
       this.state_.flags.payload_on_neck = true;
       this.push("Carrier is holding over the neck deck. Brake is real. Alignment is inside tolerance.");
     }
@@ -530,9 +489,7 @@ export class Simulation {
     if (events.length > 40) events.splice(0, events.length - 40);
   }
 
-  state(): WorldState {
-    return this.state_;
-  }
+  state(): WorldState { return this.state_; }
 
   replaceState(state: WorldState): void {
     this.state_ = cloneState(state);
