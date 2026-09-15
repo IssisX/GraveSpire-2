@@ -29,6 +29,7 @@ import { ContextResolver, eyePose, type ContextResult } from "./context.ts";
 import { lineOfSight } from "./collision.ts";
 import { actionsFor, type ActionOption } from "./actions.ts";
 import { MachineOperator, type MachineKind } from "./machine.ts";
+import { pickBark } from "./barks.ts";
 import {
   DEFAULT_SETTINGS,
   deviceDefaults,
@@ -120,6 +121,18 @@ export function mountGame(canvas: HTMLCanvasElement) {
   let metRami = false;
   let hudTick = 0;
   const machineKeyPrev = new Map<string, boolean>();
+
+  // ---- parachute barks: fired on state transitions, not every frame -------
+  let wasParachuting = false;
+  let chuteFreefallBarkAt = -1;
+  let wasDiving = false;
+  let wasBraking = false;
+
+  function bark(trigger: Parameters<typeof pickBark>[0]) {
+    const line = pickBark(trigger);
+    flash(line.text);
+    audio.playClip(`audio/barks/${line.clip}.mp3`);
+  }
 
   const shownAction = { label: "", kind: "" };
   const shownLook = { id: "", dist: -1 };
@@ -846,16 +859,44 @@ export function mountGame(canvas: HTMLCanvasElement) {
     const STEP = 1 / 60;
     let guard = 0;
     while (accPlayer >= STEP && guard++ < 6) {
-      player.step(STEP, actions, walkColliders, platformDelta);
+      // jumpPressed is a one-shot edge for this real frame, not per
+      // substep. A hitched frame that runs this loop more than once would
+      // otherwise re-feed the same press to a second step() call, which
+      // (grounded already false from the first jump) falls into the
+      // mantle/chute-deploy branch and can open the chute off an ordinary
+      // jump on a lag spike.
+      const substepActions = guard === 1 ? actions : { ...actions, jumpPressed: false };
+      player.step(STEP, substepActions, walkColliders, platformDelta);
       accPlayer -= STEP;
     }
     if (guard >= 6) accPlayer = 0;
     applyVentHazard(dt);
 
+    // ---- parachute barks -----------------------------------------------
+    if (player.parachuting && !wasParachuting) {
+      bark("deploy");
+      chuteFreefallBarkAt = 1.2;
+      wasDiving = false;
+      wasBraking = false;
+    }
+    if (player.parachuting) {
+      if (chuteFreefallBarkAt > 0) {
+        chuteFreefallBarkAt -= dt;
+        if (chuteFreefallBarkAt <= 0) bark("freefall");
+      }
+      if (actions.sprint && !wasDiving) bark("dive");
+      if (actions.crouch && !wasBraking) bark("brake");
+      wasDiving = actions.sprint;
+      wasBraking = actions.crouch;
+    }
+    const chuteLanded = player.landedByChute;
+    wasParachuting = player.parachuting;
+
     const landing = player.takeLandingImpact();
     if (landing > 0.6) audio.land(landing);
 
     const fall = player.fallDamage();
+    if (chuteLanded) bark("land");
     if (fall === "dead") {
       leavePlaying("dead");
       useGame.getState().patch({ prompt: "No support. The well is real." });

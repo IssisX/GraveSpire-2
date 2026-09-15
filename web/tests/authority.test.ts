@@ -26,6 +26,8 @@ import {
 import { Gait } from "@/game/gait.ts";
 import { ContextResolver, eyePose, type Interactable } from "@/game/context.ts";
 import type { Collider } from "@/game/collision.ts";
+import { Player } from "@/game/player.ts";
+import type { Actions } from "@/game/input.ts";
 
 let failures = 0;
 let checks = 0;
@@ -829,6 +831,85 @@ group("the counterweight hatch holds open only while pulled, then swings shut");
     "released, the flap's own weight wins back and it swings shut again",
     tipY() < 0.2,
     `tip=${tipY().toFixed(3)} m`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+group("the parachute: arcade flight, always-survivable landings");
+{
+  function noInput(overrides: Partial<Actions> = {}): Actions {
+    return {
+      moveX: 0, moveY: 0, moveMag: 0,
+      lookX: 0, lookY: 0,
+      jump: false, jumpPressed: false,
+      crouch: false, sprint: false,
+      interact: false, interactPressed: false, interactReleased: false,
+      inspectPressed: false, pausePressed: false, cyclePressed: false,
+      ...overrides,
+    };
+  }
+  const GROUND: Collider = { id: "ground", minx: -50, maxx: 50, miny: -0.5, maxy: 0, minz: -50, maxz: 50 };
+  const dt = 1 / 60;
+
+  const noChute = new Player();
+  noChute.x = 0; noChute.y = 100; noChute.z = 0; noChute.grounded = false;
+  noChute.step(dt, noInput({ jumpPressed: true }), [GROUND]);
+  check("without chuteEquipped, a second jump press does not deploy", !noChute.parachuting);
+
+  const p = new Player();
+  p.x = 0; p.y = 100; p.z = 0; p.grounded = false; p.chuteEquipped = true;
+  p.step(dt, noInput({ jumpPressed: true }), [GROUND]);
+  check("chute equipped: a jump press while airborne deploys it", p.parachuting);
+  for (let i = 0; i < 240; i++) p.step(dt, noInput(), [GROUND]);
+  check("vy settles at the base terminal velocity, not free-fall", Math.abs(p.vy - -4.5) < 0.3, `vy=${p.vy.toFixed(2)} (target -4.5)`);
+
+  const brake = new Player();
+  brake.x = 0; brake.y = 100; brake.z = 0; brake.grounded = false; brake.chuteEquipped = true; brake.parachuting = true;
+  for (let i = 0; i < 120; i++) brake.step(dt, noInput({ crouch: true }), [GROUND]);
+  check("holding brake settles to a slower descent than the base rate", brake.vy > -2.2 && brake.vy < -1.3, `vy=${brake.vy.toFixed(2)}`);
+
+  const dive = new Player();
+  dive.x = 0; dive.y = 100; dive.z = 0; dive.grounded = false; dive.chuteEquipped = true; dive.parachuting = true;
+  for (let i = 0; i < 120; i++) dive.step(dt, noInput({ sprint: true }), [GROUND]);
+  check("holding dive settles to a faster descent than the base rate", dive.vy < -9 && dive.vy > -12, `vy=${dive.vy.toFixed(2)}`);
+
+  const steer = new Player();
+  steer.x = 0; steer.y = 100; steer.z = 0; steer.yaw = 0; steer.grounded = false; steer.chuteEquipped = true; steer.parachuting = true;
+  for (let i = 0; i < 90; i++) steer.step(dt, noInput({ moveX: 1, moveMag: 1 }), [GROUND]);
+  check("steering produces real lateral velocity", Math.abs(steer.vx) > 5, `vx=${steer.vx.toFixed(2)}`);
+
+  const land = new Player();
+  land.x = 0; land.y = 20; land.z = 0; land.grounded = false; land.chuteEquipped = true;
+  land.step(dt, noInput({ jumpPressed: true }), [GROUND]);
+  for (let i = 0; i < 600 && !land.grounded; i++) land.step(dt, noInput(), [GROUND]);
+  check("chute stows on landing", !land.parachuting);
+  check(
+    "landing from 20 m under canopy is survivable -- past the normal 8.5 m death threshold",
+    land.fallDamage() === "none",
+  );
+  land.y = 20; land.grounded = false; land.airTime = 0; land.fallFrom = 20; land.vy = 0;
+  for (let i = 0; i < 600 && land.y > 0.01; i++) land.step(dt, noInput(), [GROUND]);
+  check("a later fall WITHOUT the chute is still dangerous -- damage isn't globally disabled", land.fallDamage() === "dead");
+
+  // DEFECT (code review): the well's pit floor is collider:false; the only
+  // thing that stopped an unassisted fall there was the unconditional
+  // y<-6 death check, now suppressed while parachuting. A glide over open
+  // geometry with nothing beneath it must still resolve, not fall forever.
+  const bottom = new Player();
+  bottom.x = 21; bottom.y = 20; bottom.z = 0; bottom.grounded = false; bottom.chuteEquipped = true;
+  bottom.step(dt, noInput({ jumpPressed: true }), []); // deploy over NO colliders at all
+  for (let i = 0; i < 3000 && !bottom.grounded; i++) bottom.step(dt, noInput(), []);
+  check("a glide with no floor anywhere still resolves, not an infinite fall", bottom.grounded && bottom.y === -30, `grounded=${bottom.grounded} y=${bottom.y}`);
+  check("it resolves as a safe landing, not damage", bottom.fallDamage() === "none");
+  // DEFECT (code review, round 2): a one-shot grounded=true here was
+  // overwritten by moveCapsule's own correct grounded=false on the very
+  // next step (there is no real collider down there), which -- with
+  // parachuting already cleared -- walked back into the death check one
+  // frame later. Confirm it STAYS resolved, not just at the landing instant.
+  for (let i = 0; i < 300; i++) bottom.step(dt, noInput(), []);
+  check(
+    "it stays safely resolved for many further frames, not just the landing instant",
+    bottom.grounded && bottom.y === -30 && bottom.fallDamage() === "none",
   );
 }
 

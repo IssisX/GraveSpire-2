@@ -13,6 +13,20 @@ const CAP_R = 0.32;
 const CAP_H = 1.72;
 const CAP_H_CROUCH = 1.05;
 
+/**
+ * Arcade parachute flight, not simulated aerodynamics: a controlled glide
+ * with a low terminal velocity, not a drag/lift body. Brake (crouch) and
+ * dive (sprint) both target a different descent rate; steering reuses the
+ * same forward/right wish direction ordinary movement already computes,
+ * just with the chute's own accel and top speed instead of walking's.
+ */
+const CHUTE_VY_BASE = -4.5;
+const CHUTE_VY_DIVE = -11;
+const CHUTE_VY_BRAKE = -1.8;
+const CHUTE_VY_RATE = 3.0;
+const CHUTE_LATERAL_MAX = 9;
+const CHUTE_LATERAL_ACCEL = 14;
+
 export class Player {
   x = 8.8;
   y = 0.05;
@@ -38,6 +52,29 @@ export class Player {
   /** Magnitude of the movement request last step, 0..1. */
   moveInput = 0;
 
+  /** Handed out at the tower's entrance, not earned mid-climb (world code
+   *  sets this true once the player is equipped, false in every other
+   *  context). Gates whether a second jump-press deploys the chute instead
+   *  of just trying to mantle. */
+  chuteEquipped = false;
+  /** True from deploy until landing. Overrides the normal gravity/movement
+   *  integration below with an arcade glide instead of free fall. */
+  parachuting = false;
+  /** Set for exactly one step on a chute-assisted landing, consumed by
+   *  fallDamage() so any height under canopy is survivable -- that is the
+   *  entire point of the mechanic -- without weakening fall damage for a
+   *  normal, chute-less fall anywhere else in the game. */
+  landedByChute = false;
+  /** True once the player has hit the absolute floor of the world (see
+   *  step()). Persists, unlike landedByChute: there is no real collider
+   *  down there to naturally re-ground on, so a one-shot flag gets
+   *  overwritten by moveCapsule's own (correct) `grounded=false` on the
+   *  very next step -- with parachuting already cleared, that reopens the
+   *  unconditional y<-6 death check and kills the player one frame after
+   *  "safely" landing them. Movement/gravity stay parked while this holds;
+   *  only external code (a future checkpoint return) clears it. */
+  worldFloored = false;
+
   forward(): { x: number; z: number } {
     return { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) };
   }
@@ -55,6 +92,13 @@ export class Player {
   }
 
   step(dt: number, actions: Actions, colliders: Collider[], platformDelta?: { x: number; y: number; z: number }) {
+    if (this.worldFloored) {
+      this.vx = 0;
+      this.vy = 0;
+      this.vz = 0;
+      this.grounded = true;
+      return;
+    }
     if (this.mantleTo && this.mantleT > 0) {
       this.mantleT -= dt;
       const u = Math.max(0, this.mantleT) / 0.32;
@@ -105,7 +149,11 @@ export class Player {
     } else {
       this.coyote -= dt;
       this.airTime += dt;
-      this.vy -= GRAVITY * dt;
+      // While parachuting, the glide block below owns vy entirely (its
+      // target-seeking ease already stands in for gravity vs. canopy drag
+      // together); applying raw gravity here too would fight that term and
+      // settle at target - GRAVITY/CHUTE_VY_RATE instead of at target.
+      if (!this.parachuting) this.vy -= GRAVITY * dt;
     }
 
     if (actions.jumpPressed && this.coyote > 0) {
@@ -119,12 +167,29 @@ export class Player {
         this.mantleT = 0.32;
         return;
       }
+      if (this.chuteEquipped && !this.parachuting) {
+        this.parachuting = true;
+        // Fall damage tracks total drop since last grounded; deploying
+        // resets what counts as "the fall" from here, rather than
+        // grandfathering in whatever height preceded the decision to open
+        // it -- the chute is meant to make anything after this survivable.
+        this.fallFrom = this.y;
+      }
     }
 
     if (platformDelta && this.grounded && this.groundedId === "carrier") {
       this.x += platformDelta.x;
       this.y += platformDelta.y;
       this.z += platformDelta.z;
+    }
+
+    if (this.parachuting) {
+      const chuteTargetVx = nx * CHUTE_LATERAL_MAX;
+      const chuteTargetVz = nz * CHUTE_LATERAL_MAX;
+      this.vx += (chuteTargetVx - this.vx) * Math.min(1, CHUTE_LATERAL_ACCEL * dt);
+      this.vz += (chuteTargetVz - this.vz) * Math.min(1, CHUTE_LATERAL_ACCEL * dt);
+      const chuteTargetVy = this.crouch ? CHUTE_VY_BRAKE : actions.sprint ? CHUTE_VY_DIVE : CHUTE_VY_BASE;
+      this.vy += (chuteTargetVy - this.vy) * Math.min(1, CHUTE_VY_RATE * dt);
     }
 
     const wasGrounded = this.grounded;
@@ -151,6 +216,37 @@ export class Player {
     if (!wasGrounded && this.grounded && approachSpeed < -0.6) {
       this.landingImpact = -approachSpeed;
     }
+    if (!wasGrounded && this.grounded && this.parachuting) {
+      this.parachuting = false;
+      this.landedByChute = true;
+    }
+
+    // Absolute floor of the world. A chute-suppressed y < -6 death check
+    // means whatever real collider geometry may or may not exist below a
+    // given point, a parachuting player must still always resolve to a
+    // landing eventually -- e.g. the freight well's pit floor is a visual
+    // box with no collider, so without this a glide out over it would fall
+    // forever with no death and no ground. Matches the existing "anything
+    // that leaves the world is clamped, not lost" convention already used
+    // for bodies (simulation.ts), rather than a special case for one pit.
+    // Persistent (worldFloored), not a one-shot grounded=true: there is no
+    // real geometry down here, so moveCapsule would just recompute
+    // grounded=false again next step and, with parachuting now cleared,
+    // walk straight back into the unconditional death check one frame
+    // later. See the worldFloored early-return at the top of this method.
+    if (!this.grounded && this.y < -30) {
+      this.y = -30;
+      this.vx = 0;
+      this.vy = 0;
+      this.vz = 0;
+      this.grounded = true;
+      this.worldFloored = true;
+      if (this.parachuting) {
+        this.parachuting = false;
+        this.landedByChute = true;
+      }
+    }
+
     this.speed = Math.hypot(this.vx, this.vz);
   }
 
@@ -162,7 +258,17 @@ export class Player {
   }
 
   fallDamage(): "none" | "hurt" | "dead" {
-    if (this.y < -6) return "dead";
+    if (this.worldFloored) return "none";
+    if (this.landedByChute) {
+      this.landedByChute = false;
+      this.airTime = 0;
+      return "none";
+    }
+    // The depth check is an absolute-altitude safety net for an accidental
+    // fall; it must not fire while a deliberate, controlled descent under
+    // canopy is still in progress, or a tall drop would kill the player
+    // before they ever reach the ground to land safely on.
+    if (this.y < -6 && !this.parachuting) return "dead";
     if (this.grounded && this.airTime > 0.05) {
       const drop = this.fallFrom - this.y;
       this.airTime = 0;

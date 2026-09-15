@@ -357,7 +357,7 @@ what a player can see, and every one of them can fail:
 ## Verified here
 
 - `npm run typecheck` — clean.
-- `npm test` — 97/97 authority reference checks.
+- `npm test` — 109/109 authority reference checks.
 - `npm run build` — production bundle emitted.
 - `make test` — native C++ reference cases still pass, unchanged.
 - Headless Chromium against the production build: boot → menu → settings →
@@ -433,6 +433,90 @@ browser verification above, which is what actually confirmed the render
 fix — a passing test suite doesn't look at pixels.
 
 97/97 tests.
+
+## The Ascent — a second mode, first vertical slice
+
+A separate experience from Act I, not a replacement or an extension of it:
+Act I (Rami, the drive, the grounded "Death loads an explicit save" tone,
+every system documented above) is completely untouched by anything in this
+section — nothing here reads or writes Act I's world state, mission flags,
+or save data. Locked through a structured design pass (12 forks, each with
+real alternatives, each with a stated reason) before any code: a finite
+climb (~15–25 floors) up a tower of physical mechanisms, reachable from an
+in-world entry point (not yet built), where each floor is solved with the
+same fixed toolkit as Act I — no new player verbs, difficulty from harder
+physics, not more buttons. The player can bail at any point by deploying a
+parachute, handed out at the tower's entrance, and falling all the way down
+returns them to their last checkpoint floor — no real stakes, a joyride,
+not a punishing reset. Full design brief and the 12 locked decisions are in
+this session's record; only the first vertical slice is built here.
+
+**Built and verified this pass — the parachute (`player.ts`, `barks.ts`,
+`audio.ts`, `runtime.ts`):** arcade flight, not simulated aerodynamics.
+Deploy is a second jump-press while airborne (same input as the existing
+mantle check — mantle wins if a ledge is found, deploy is the fallback);
+steering reuses the same forward/right wish-direction math ordinary
+movement already computes, just against the chute's own accel/top-speed;
+brake (crouch) and dive (sprint) each target a different descent rate,
+eased toward with the same eased pattern used throughout the input model,
+not toggled. Landing under canopy is unconditionally survivable regardless
+of total drop distance — that is the entire point of the mechanic — without
+weakening fall damage anywhere else in the game.
+
+Fear-yelling barks (`barks.ts`) fire on real state transitions (deploy,
+~1.2s into the fall, first dive, first brake, landing), display as captions
+through the exact `flash()` HUD text every other message in the game
+already uses, and — per the locked content decision — are written with
+full, uncensored profanity. `GameAudio.playClip()` is a new, small
+capability (this engine was 100% synthesized WebAudio before this; nothing
+loaded an external file): fetch, decode, play, cache; a missing clip fails
+once per URL and silently stays caption-only from then on. The line bank
+above is a script, not finished audio — real recording is out of scope for
+what I can produce and is on you or a collaborator; the moment real files
+land at `audio/barks/<name>.mp3`, they play with no code change on either
+side of that.
+
+Two real bugs, both caught by `/code-review`, not shipped:
+
+- **The unconditional `y < -6` death check**, suppressed while parachuting
+  so a controlled descent can't be killed by its own height, left nothing
+  to stop a genuinely bottomless fall — the freight well's pit floor is a
+  visual-only box (`collider: false`), so a glide out over it fell forever
+  with no death and no landing. Fixed with a hard floor of the world
+  (`y = -30`), matching the existing "anything that leaves the world is
+  clamped, not lost" convention already used for bodies (`simulation.ts`),
+  rather than a special case for one pit.
+- That floor's first version set `grounded = true` for one step and moved
+  on. It didn't hold: with no real collider actually down there,
+  `moveCapsule` recomputes `grounded = false` again on the very next step
+  — correctly, there's nothing to stand on — and with `parachuting` already
+  cleared by the first "landing," that walks straight back into the same
+  unconditional death check one frame later. Fixed with a persistent
+  `worldFloored` flag that short-circuits movement/gravity entirely (same
+  shape as the existing `mantleTo` early-return) until something external
+  moves the player elsewhere — there is no checkpoint system yet to do
+  that, so for now landing there is a stable, permanent safe harbor, not a
+  bug.
+- A third finding (a laggy frame's fixed-timestep catch-up loop could feed
+  the same one-shot `jumpPressed` edge into two `player.step()` calls,
+  occasionally turning an ordinary jump into an accidental deploy) was
+  fixed in `runtime.ts` by suppressing the edge on every substep after the
+  first within one real frame.
+
+Verified live in a headless browser (`run` skill's pattern): deploy, steer,
+dive, land — each with the matching bark caption on screen at the right
+moment (screenshots, not just state reads) — and the well fall-through
+fix confirmed to *stay* resolved across many further real frames, which is
+exactly the case the naive one-shot version got wrong.
+
+**Deferred, not vague future work — the next concrete passes:** the
+in-world access point; the first hand-built signature floor; the
+module-kit generator that reuses the `point`/`distance`/`pulley` joints
+above with varied mass/geometry; the checkpoint system itself (falling
+currently resolves safely but does not yet return the player anywhere);
+`chuteEquipped` is wired and tested but never set `true` by any real
+gameplay path yet — intentional, since the design is "handed out at the
+tower's entrance," which doesn't exist yet, not an oversight.
 
 ## Sibling branches surveyed, nothing adopted
 

@@ -11,6 +11,10 @@ export class GameAudio {
   ventGain: GainNode | null = null;
   ventFilter: BiquadFilterNode | null = null;
   ventSource: AudioBufferSourceNode | null = null;
+  /** Decoded-clip cache, and a set of URLs already known missing so a
+   *  not-yet-recorded line fails once per session, not once per bark. */
+  private clipCache = new Map<string, AudioBuffer>();
+  private clipMissing = new Set<string>();
 
   unlock = () => {
     if (!this.ctx) {
@@ -182,6 +186,46 @@ export class GameAudio {
     const t = this.ctx.currentTime;
     this.ventGain.gain.setTargetAtTime(open ? 0.05 + 0.13 * pressureNorm : 0, t, 0.15);
     this.ventFilter?.frequency.setTargetAtTime(1300 + 1800 * pressureNorm, t, 0.2);
+  }
+
+  /**
+   * Play a recorded clip by url (relative to the site root), for content
+   * this synth engine can't produce -- voice lines. Silent no-op if the
+   * file doesn't exist yet: a script can ship and be wired in today, and
+   * start actually being heard the moment a real recording lands at that
+   * path, with no code change either side of that.
+   */
+  playClip(url: string, vol = 1) {
+    if (!this.ctx || !this.sfx || this.clipMissing.has(url)) return;
+    const play = (buf: AudioBuffer) => {
+      if (!this.ctx || !this.sfx) return;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const g = this.ctx.createGain();
+      g.gain.value = vol;
+      src.connect(g);
+      g.connect(this.sfx);
+      src.start();
+      src.onended = () => {
+        src.disconnect();
+        g.disconnect();
+      };
+    };
+    const cached = this.clipCache.get(url);
+    if (cached) {
+      play(cached);
+      return;
+    }
+    fetch(url)
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status}`))))
+      .then((ab) => this.ctx!.decodeAudioData(ab))
+      .then((buf) => {
+        this.clipCache.set(url, buf);
+        play(buf);
+      })
+      .catch(() => {
+        this.clipMissing.add(url);
+      });
   }
 
   setMasterVolume(v: number) {
