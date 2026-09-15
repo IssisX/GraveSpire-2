@@ -43,9 +43,10 @@ export function moveCapsule(
   vz: number,
   colliders: Collider[],
   stepUp = 0.4,
-): { x: number; y: number; z: number; grounded: boolean; groundedId: string | null; hitHead: boolean } {
+): { x: number; y: number; z: number; grounded: boolean; groundedId: string | null; hitHead: boolean; sideHits: string[] } {
   let { x, y, z, r, h } = cap;
   const list = colliders.filter((c) => !c.disabled);
+  const sideHits = new Set<string>();
 
   const resolveAxis = (axis: "x" | "z") => {
     for (const c of list) {
@@ -66,6 +67,7 @@ export function moveCapsule(
             continue;
           }
         }
+        sideHits.add(c.id);
         if (left < right) x = c.minx - r - 0.001;
         else x = c.maxx + r + 0.001;
       }
@@ -85,6 +87,7 @@ export function moveCapsule(
             continue;
           }
         }
+        sideHits.add(c.id);
         if (dn < up) z = c.minz - r - 0.001;
         else z = c.maxz + r + 0.001;
       }
@@ -127,7 +130,7 @@ export function moveCapsule(
     }
   }
 
-  return { x, y, z, grounded, groundedId, hitHead };
+  return { x, y, z, grounded, groundedId, hitHead, sideHits: [...sideHits] };
 }
 
 export function mantleProbe(
