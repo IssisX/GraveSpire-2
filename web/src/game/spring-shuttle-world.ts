@@ -7,6 +7,7 @@ import type { Collider } from "./collision.ts";
 import type { Level } from "./level.ts";
 import { makeSignTexture } from "./materials.ts";
 import { applyUpperCascadeCoupling } from "./upper-world.ts";
+import { applyVerticalSpineCoupling } from "./vertical-world.ts";
 
 type ShuttleBindings = {
   root: THREE.Group;
@@ -162,4 +163,5 @@ export function applySpringShuttleCoupling(level: Level, sim: Simulation): void 
   b.spring.scale.y = springHeight;
 
   applyUpperCascadeCoupling(level, sim);
+  applyVerticalSpineCoupling(level, sim);
 }
