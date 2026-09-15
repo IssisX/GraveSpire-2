@@ -1,6 +1,6 @@
 /** Declared Act I reduction. Not GDD §7 / §16. */
 export const MODEL_CLASS =
-  "Act I reduced: lumped freight/frame/gate coupling + declared elastic members + tension-only cables + finite motors/brakes/pressure + persistent plastic set + MC-01 planar lever/ballast/lift + linked generalized-coordinate MC-02/MC-03 rocker/pawl/counterweight/carriage/bridge mechanics + MC-04 preloaded spring shuttle released by bridge contact. Not co-rotational FEM, not general 6-DOF contact, not fracture-energy, not Craig–Bampton.";
+  "Act I reduced: lumped freight/frame/gate coupling + declared elastic members + tension-only cables + finite motors/brakes/pressure + persistent plastic set + one shared generalized-coordinate mechanical network spanning MC-01 lever/ballast/lift/rope, MC-02 rocker/pawl/counterweight/carriage, MC-03 bridge release/bridge, and MC-04 spring shuttle. Legacy MC-01 fields are compatibility projections only, not solver authority. Not co-rotational FEM, not general 6-DOF contact, not fracture-energy, not Craig–Bampton.";
 
 export const AUTHORITY_DT = 1 / 30;
 export const MECHANICS_DT = 1 / 120;
@@ -91,28 +91,33 @@ export interface GateState {
   wedged: boolean;
 }
 
+/** Compatibility/read-model projection of MC-01 lever state. Network DOF is authoritative. */
 export interface RubeLeverState {
   angle_rad: number;
   omega_radps: number;
   mass_kg: number;
   inertia_kgm2: number;
   net_torque_nm: number;
+  /** Constraint topology state; not a duplicate mechanical coordinate. */
   latch_engaged: boolean;
   latch_angle_rad: number;
 }
 
+/** Compatibility/read-model projection of MC-01 ballast state. Network DOF is authoritative. */
 export interface RubeBallastState {
   mass_kg: number;
   s_m: number;
   velocity_mps: number;
 }
 
+/** Compatibility/read-model projection of MC-01 lift state. Network DOF is authoritative. */
 export interface RubeLiftState {
   mass_kg: number;
   y_m: number;
   velocity_mps: number;
 }
 
+/** Compatibility/read-model projection of MC-01 rope state. Network cable is authoritative. */
 export interface RubeRopeState {
   rest_length_m: number;
   length_m: number;
@@ -160,13 +165,16 @@ export interface MechanicalCableState {
 }
 
 export interface MechanicalNetworkState {
+  /** Sole q/v authority for the linked reduced mechanisms. */
   dofs: MechanicalDofState[];
+  /** Sole routed tension authority for linked reduced mechanisms. */
   cables: MechanicalCableState[];
   dissipated_j: number;
 }
 
 export interface LinkedCascadeState {
   network: MechanicalNetworkState;
+  /** Constraint/control state around the shared network, never duplicate q/v. */
   transfer_brake_engaged: boolean;
   transfer_brake_capacity_n: number;
   entry_contact_n: number;
@@ -179,12 +187,13 @@ export interface LinkedCascadeState {
 }
 
 export interface RubeState {
+  /** Read-model compatibility projections for existing UI/save consumers. */
   lever: RubeLeverState;
   ballast: RubeBallastState;
   lift: RubeLiftState;
   rope: RubeRopeState;
   energy: RubeEnergyState;
-  /** Added lazily for saves written before MC-02 / MC-03 / MC-04 existed. */
+  /** Shared solver authority. Added/upgraded lazily for older saves. */
   chain?: LinkedCascadeState;
 }
 
