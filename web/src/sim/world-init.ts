@@ -57,6 +57,24 @@ function gallerySpan(id: string, x: number): MemberState {
  * be hung off something. The capability ladder is friction and gravity, not a
  * whitelist.
  */
+/**
+ * Hatch geometry, named once. The flap/counterweight seed positions below,
+ * the joints' anchor points, and the pulley's rest length all derive from
+ * these same values instead of retyping the same coordinates in three
+ * places where they could silently drift apart on a future retune.
+ */
+const HATCH = {
+  pivot: [30, 0.075, -8] as const,
+  pulley: [33, 3.075, -8] as const,
+  flapAt: [31.5, 0.075, -8] as const,
+  flapHalfLength: 1.5,
+  cwAt: [33, 1.15, -8] as const,
+};
+function dist3(a: readonly [number, number, number], b: readonly [number, number, number]): number {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+const HATCH_TIP: [number, number, number] = [HATCH.flapAt[0] + HATCH.flapHalfLength, HATCH.flapAt[1], HATCH.flapAt[2]];
+
 const DEBRIS: BodyDef[] = [
   // --- Bay 07: the opening. Enough vocabulary to invent with. ---
   { id: "plate_a", name: "Deck plate", material: "steel", size: [2.6, 0.06, 0.5], mass_kg: 58, at: [12.6, 0.4, -8.6] },
@@ -96,6 +114,24 @@ const DEBRIS: BodyDef[] = [
   // tips that end to the floor and lifts the other, the same beam-corner
   // contact that stops it there as stops any other body at the ground.
   { id: "lever_beam", name: "Counterweight lever", material: "steel", size: [7.0, 0.3, 0.6], mass_kg: 260, at: [22, 0.55, -8] },
+
+  // Hatch flap: pinned at one edge (hatch_pivot) near the floor, coupled by
+  // a pulley (hatch_pulley) to a hanging counterweight it doesn't touch or
+  // rest on. At 100 kg the flap alone is already past hand-lift, and its
+  // own weight holds it flat until something pulls back through the rope.
+  // The 40 kg counterweight is liftable on its own (grab_body already
+  // offers it, nothing new) but 40 kg of straight-down pull isn't enough by
+  // itself -- add the player's own up-to-900 N carry force to it and the
+  // combined pull crosses what the flap's weight resists, swinging it open
+  // for as long as it's held. Let go and the flap's own weight wins back,
+  // swinging it shut -- a held-open mechanism, not a permanent one like the
+  // lever. (An earlier version asked the player to stack loose crates on an
+  // elevated tray instead; a crate landing on a tray that is itself
+  // mid-swing kept getting knocked off before the system settled -- a real
+  // reliability problem, not a tuning one, so the tray was dropped in favor
+  // of pulling the counterweight directly.)
+  { id: "hatch_flap", name: "Counterweight hatch", material: "steel", size: [3.0, 0.15, 1.5], mass_kg: 100, at: [...HATCH.flapAt] },
+  { id: "hatch_counterweight", name: "Hatch counterweight", material: "steel", size: [0.5, 0.5, 0.5], mass_kg: 40, at: [...HATCH.cwAt] },
 ];
 
 /**
@@ -112,6 +148,29 @@ const JOINTS: Joint[] = [
     force_n: 0,
     a: { bodyId: "lever_beam", point: [0, 0, 0] },
     b: { bodyId: null, point: [22, 0.55, -8] },
+  },
+  {
+    id: "hatch_pivot",
+    kind: "point",
+    force_n: 0,
+    a: { bodyId: "hatch_flap", point: [-HATCH.flapHalfLength, 0, 0] },
+    b: { bodyId: null, point: [...HATCH.pivot] },
+  },
+  // Total length is the sum of both segments at the seeded rest pose,
+  // derived from the same HATCH constants the bodies above are seeded
+  // from -- so retuning flapAt or cwAt can never leave this stale -- not
+  // guessed, so the constraint starts with zero error instead of popping
+  // on the first tick to fix a mismatch nobody intended.
+  {
+    id: "hatch_pulley",
+    kind: "pulley",
+    force_n: 0,
+    jAcc: 0,
+    a: { bodyId: "hatch_flap", point: [HATCH.flapHalfLength, 0, 0] },
+    pulleyPoint: [...HATCH.pulley],
+    b: { bodyId: "hatch_counterweight", point: [0, 0, 0] },
+    totalLength: dist3(HATCH_TIP, HATCH.pulley) + dist3(HATCH.cwAt, HATCH.pulley),
+    mode: "rod",
   },
 ];
 

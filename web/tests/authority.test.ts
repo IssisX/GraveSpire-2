@@ -798,5 +798,39 @@ group("the counterweight lever is a real obstacle, not a scripted one");
   check("the pivot itself never moved -- it took the load, not the joint failing", Math.hypot(lever.px - 22, lever.py - 0.55, lever.pz + 8) < 0.05);
 }
 
+// ---------------------------------------------------------------------------
+group("the counterweight hatch holds open only while pulled, then swings shut");
+{
+  const sim = new Simulation();
+  sim.setStatics([{ id: "floor_sw", minx: 0, maxx: 42, miny: -0.5, maxy: 0, minz: -11.5, maxz: -3.5 }]);
+  tick(sim, 180);
+
+  const tipY = () => anchorWorld(sim.body("hatch_flap")!, 1.5, 0, 0)[1];
+  check("unloaded, the flap's own weight holds it flat and asleep", sim.body("hatch_flap")!.sleeping && tipY() < 0.2, `tip=${tipY().toFixed(3)} m`);
+
+  // Grab the counterweight through the real action and hold it down, the
+  // same way the player would -- not a direct body mutation.
+  const verdict = sim.act({ type: "grab_body", id: "hatch_counterweight" });
+  check("the counterweight alone is liftable by hand", verdict.includes("lift"), verdict);
+  for (let i = 0; i < 400; i++) {
+    sim.setCarryTarget({ x: 33, y: 0.3, z: -8 });
+    sim.advanceAuthorityTick();
+  }
+  check(
+    "held and pulled down, the combined force swings the flap open",
+    tipY() > 0.5,
+    `tip=${tipY().toFixed(3)} m`,
+  );
+
+  sim.act({ type: "release_body", throw: false });
+  sim.setCarryTarget(null);
+  tick(sim, 500);
+  check(
+    "released, the flap's own weight wins back and it swings shut again",
+    tipY() < 0.2,
+    `tip=${tipY().toFixed(3)} m`,
+  );
+}
+
 console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${checks - failures}/${checks} authority reference checks`);
 if (failures > 0) process.exit(1);

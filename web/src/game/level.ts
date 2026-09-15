@@ -309,6 +309,19 @@ export function buildLevel(scene: THREE.Scene): Level {
   // reads as the thing the beam is pivoting on.
   k.box(0.5, 0.4, 0.5, 22, 0.2, -8, mats.steelDark, { collider: false });
 
+  // Hatch hinge and pulley gantry: the counterweight hatch (hatch_flap,
+  // hatch_counterweight, sim/world-init.ts) is pinned at one edge and
+  // coupled to its counterweight through a fixed point at the top of this
+  // post -- both joints, not contact, so both posts are render-only. The
+  // upright is offset in z off the counterweight's own x,z column (it
+  // hangs and travels at x=33,z=-8) rather than standing on it, so the
+  // counterweight is never rendered behind/inside solid steel; a short arm
+  // carries the actual pulley point back over to where the joint puts it.
+  k.box(0.35, 0.2, 0.35, 30, 0.075, -8, mats.steelDark, { collider: false });
+  k.box(0.25, 3.075, 0.25, 33, 3.075 / 2, -8.6, mats.steelDark, { collider: false });
+  k.box(0.25, 0.2, 0.7, 33, 3.075, -8.3, mats.steelDark, { collider: false });
+  k.cyl(0.18, 0.18, 0.12, 33, 3.075, -8, mats.steel, Math.PI / 2, 0);
+
   // catwalks
   k.box(38, 0.16, 1.6, 20, 5.68, 9.15, mats.grating, { id: "cat_n" });
   k.box(38, 0.16, 1.6, 20, 5.68, -9.15, mats.grating, { id: "cat_s" });

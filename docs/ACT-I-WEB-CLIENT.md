@@ -232,12 +232,40 @@ test-setup bug, not a solver one). The pivot stand itself is render-only
 that height, and a solid collider at the same point would fight it as the
 beam tilts.
 
-**Not built on it, left as sized next steps:** a rope-and-pulley
-counterweight lift (two bodies coupled through a fixed point, one side's
-descent driven by loading the other) and a winch-driven gate or drawbridge
-(a `distance` joint's `motor` paying a rope in or out at a bounded force).
-Both are data — a `Joint` entry and, for the winch, a driving command — not
-new solver code; the joint primitive above is what both would be built from.
+Also shipped: `hatch_flap` + `hatch_counterweight` — the `pulley` primitive's
+first real use in content, and a second interaction *shape* next to the
+lever's. The 100 kg flap is pinned at one edge (`hatch_pivot`) near the
+floor and stays shut under its own weight; a 40 kg counterweight hangs off
+its far end through a fixed point (`hatch_pulley`). The counterweight alone
+(392 N) isn't enough to overcome the flap — grab it with `grab_body` and
+pull, and the player's own carry force added to its weight crosses what the
+flap resists, swinging it open for as long as it's held; let go and the
+flap's own weight wins back, swinging it shut. Held-open, not
+permanently-tipped like the lever, from the same primitive.
+
+The first version asked the player to stack loose crates on an elevated
+tray instead of pulling the counterweight by hand. That failed in testing
+for a real reason, not a tuning one: a crate landing on a tray that is
+itself mid-swing kept getting knocked off before the system settled —
+confirmed with a direct drop test, not assumed. Pulling the counterweight
+directly needed no elevated landing zone at all, so the tray was dropped
+rather than chasing a stable stacking geometry for it.
+
+A code review of this content caught two real issues before they shipped:
+the pulley's support post was rendered dead-centre on the same x,z column
+the counterweight physically travels, so the counterweight rendered
+permanently embedded in solid steel at every height — moved the post mesh
+off that column with a short arm back to the actual (unmoved) physics
+anchor point. And the pulley's `totalLength` was hand-computed from
+literal coordinates retyped in three places (the bodies' seed positions,
+the joints' anchor points) with nothing keeping them in sync — replaced
+with one named `HATCH` geometry object everything derives from, so a future
+retune can't leave the rest length silently stale.
+
+**Not built on it, left as a sized next step:** a winch-driven gate or
+drawbridge — a `distance` joint's `motor` paying a rope in or out at a
+bounded force on a player command, rather than pulled by hand. Data and one
+driving command, not new solver code.
 
 ## Contextual interaction
 
@@ -319,12 +347,17 @@ what a player can see, and every one of them can fail:
 - a pulley conserves the rope's total length through the fixed point rather
   than applying an authored lift ratio;
 - the counterweight lever obstacle tips under a dropped load and its pivot
-  holds.
+  holds;
+- a chain of joints wakes fully within the tick a disturbance reaches it,
+  regardless of the array order the joints happen to be stored in;
+- the counterweight hatch stays shut under its own weight, swings open only
+  while its counterweight is held and pulled, and swings shut again once
+  released.
 
 ## Verified here
 
 - `npm run typecheck` — clean.
-- `npm test` — 93/93 authority reference checks.
+- `npm test` — 97/97 authority reference checks.
 - `npm run build` — production bundle emitted.
 - `make test` — native C++ reference cases still pass, unchanged.
 - Headless Chromium against the production build: boot → menu → settings →
@@ -364,6 +397,13 @@ what a player can see, and every one of them can fail:
   put them 0.5 m past floor_sw's south edge with nothing underneath; not a
   game bug, but as reliable a way as any to confirm death and fall-through
   are, in fact, real.)
+- Headless Chromium against the production build, the counterweight hatch
+  end to end: context system correctly offers "Counterweight hatch"; the
+  real `grab_body` action, then `setCarryTarget` held for 400 ticks the way
+  a player's hold-to-pull would run, swings the flap open (screenshots show
+  the visible tilt, not just the state); `release_body` lets it swing back
+  shut; player alive throughout (this run got the camera pose right the
+  first time); no console errors.
 
 ## Reviewed and fixed after the fact
 
@@ -381,7 +421,18 @@ one-frame teleport once the next tick's pass finally marked it awake and
 that stale velocity integrated all at once. Fixed by running wake
 propagation to a fixed point (bounded by `joints.length` passes) instead of
 one pass; a permanent regression test reproduces the exact failing array
-order. 93/93 tests.
+order.
+
+A second review, of the counterweight hatch, caught the two issues
+described under Joints above: the pulley support post rendered the
+counterweight permanently embedded in solid steel at its seeded position
+and everywhere it travels, and the pulley's rest length was hand-computed
+from coordinates retyped in three separate places rather than derived from
+one source, risking silent drift on a future retune. Both fixed before the
+browser verification above, which is what actually confirmed the render
+fix — a passing test suite doesn't look at pixels.
+
+97/97 tests.
 
 ## Sibling branches surveyed, nothing adopted
 
