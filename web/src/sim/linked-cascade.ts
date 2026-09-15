@@ -7,6 +7,7 @@ import {
   stepMechanicalNetwork,
   type GeneralizedForces,
 } from "./mechanical-network.ts";
+import { MECH_ID } from "./mechanical-ids.ts";
 import {
   applySpringShuttleForces,
   enforceSpringShuttleContact,
@@ -25,9 +26,7 @@ export const CHAIN = {
   counterweightStartY: 9.0,
   transferBrakeCapacityN: 45000.0,
   entryRockerArmM: 0.62,
-  // Light trip linkage: MC-01 must trigger the next mechanism, not power it.
   entryContactBaseY: 2.40,
-  // A pawl only needs to clear its tooth/face, not travel like an actuator.
   entryPawlClearM: 0.10,
   entryPawlEscapeM: 0.08,
   bridgeReleaseContactM: 13.05,
@@ -45,17 +44,17 @@ function createNetwork(): MechanicalNetworkState {
   const bridgeI = (CHAIN.bridgeMassKg * CHAIN.bridgeLengthM * CHAIN.bridgeLengthM) / 3;
   return {
     dofs: [
-      { id: "entry_rocker", kind: "rotary", q: 0, v: 0, inertia_si: 200, damping_si: 120, min_q: 0, max_q: 0.78, stop_restitution: 0 },
-      { id: "entry_pawl", kind: "linear", q: 0, v: 0, inertia_si: 85, damping_si: 500, min_q: 0, max_q: 0.40, stop_restitution: 0 },
-      { id: "transfer_carriage", kind: "linear", q: 0, v: 0, inertia_si: CHAIN.carriageMassKg, damping_si: 5500, min_q: 0, max_q: CHAIN.carriageTravelM, stop_restitution: 0.03 },
-      { id: "transfer_counterweight", kind: "linear", q: 0, v: 0, inertia_si: CHAIN.counterweightMassKg, damping_si: 900, min_q: 0, max_q: CHAIN.carriageTravelM, stop_restitution: 0 },
-      { id: "bridge_release", kind: "rotary", q: 0, v: 0, inertia_si: 5000, damping_si: 2800, min_q: 0, max_q: 0.82, stop_restitution: 0 },
-      { id: "bridge_pawl", kind: "linear", q: 0, v: 0, inertia_si: 90, damping_si: 500, min_q: 0, max_q: 0.36, stop_restitution: 0 },
-      { id: "bridge", kind: "rotary", q: CHAIN.bridgeInitialRad, v: 0, inertia_si: bridgeI, damping_si: 75000, min_q: 0, max_q: CHAIN.bridgeInitialRad, stop_restitution: 0 },
+      { id: MECH_ID.entryRocker, kind: "rotary", q: 0, v: 0, inertia_si: 200, damping_si: 120, min_q: 0, max_q: 0.78, stop_restitution: 0 },
+      { id: MECH_ID.entryPawl, kind: "linear", q: 0, v: 0, inertia_si: 85, damping_si: 500, min_q: 0, max_q: 0.40, stop_restitution: 0 },
+      { id: MECH_ID.transferCarriage, kind: "linear", q: 0, v: 0, inertia_si: CHAIN.carriageMassKg, damping_si: 5500, min_q: 0, max_q: CHAIN.carriageTravelM, stop_restitution: 0.03 },
+      { id: MECH_ID.transferCounterweight, kind: "linear", q: 0, v: 0, inertia_si: CHAIN.counterweightMassKg, damping_si: 900, min_q: 0, max_q: CHAIN.carriageTravelM, stop_restitution: 0 },
+      { id: MECH_ID.bridgeRelease, kind: "rotary", q: 0, v: 0, inertia_si: 5000, damping_si: 2800, min_q: 0, max_q: 0.82, stop_restitution: 0 },
+      { id: MECH_ID.bridgePawl, kind: "linear", q: 0, v: 0, inertia_si: 90, damping_si: 500, min_q: 0, max_q: 0.36, stop_restitution: 0 },
+      { id: MECH_ID.bridge, kind: "rotary", q: CHAIN.bridgeInitialRad, v: 0, inertia_si: bridgeI, damping_si: 75000, min_q: 0, max_q: CHAIN.bridgeInitialRad, stop_restitution: 0 },
     ],
     cables: [
       {
-        id: "entry_pawl_cable",
+        id: MECH_ID.entryPawlCable,
         base_length_m: 2,
         rest_length_m: 2,
         length_m: 2,
@@ -64,14 +63,12 @@ function createNetwork(): MechanicalNetworkState {
         tension_n: 0,
         slack: true,
         terms: [
-          // One radian of rocker rotation pays out/retracts one metre of this reduced linkage.
-          // This travel ratio lets a low-force trip release the pawl without stealing lift power.
-          { dof_id: "entry_rocker", gradient_m_per_q: 1.0 },
-          { dof_id: "entry_pawl", gradient_m_per_q: -1 },
+          { dof_id: MECH_ID.entryRocker, gradient_m_per_q: 1.0 },
+          { dof_id: MECH_ID.entryPawl, gradient_m_per_q: -1 },
         ],
       },
       {
-        id: "transfer_rope",
+        id: MECH_ID.transferRope,
         base_length_m: 20,
         rest_length_m: 20,
         length_m: 20,
@@ -80,12 +77,12 @@ function createNetwork(): MechanicalNetworkState {
         tension_n: 0,
         slack: true,
         terms: [
-          { dof_id: "transfer_carriage", gradient_m_per_q: -1 },
-          { dof_id: "transfer_counterweight", gradient_m_per_q: 1 },
+          { dof_id: MECH_ID.transferCarriage, gradient_m_per_q: -1 },
+          { dof_id: MECH_ID.transferCounterweight, gradient_m_per_q: 1 },
         ],
       },
       {
-        id: "bridge_pawl_cable",
+        id: MECH_ID.bridgePawlCable,
         base_length_m: 2,
         rest_length_m: 2,
         length_m: 2,
@@ -94,8 +91,8 @@ function createNetwork(): MechanicalNetworkState {
         tension_n: 0,
         slack: true,
         terms: [
-          { dof_id: "bridge_release", gradient_m_per_q: 0.38 },
-          { dof_id: "bridge_pawl", gradient_m_per_q: -1 },
+          { dof_id: MECH_ID.bridgeRelease, gradient_m_per_q: 0.38 },
+          { dof_id: MECH_ID.bridgePawl, gradient_m_per_q: -1 },
         ],
       },
     ],
@@ -134,25 +131,30 @@ export function toggleTransferBrake(rube: RubeState): string {
     : "Transfer carriage brake released. Counterweight and routed rope now own the carriage.";
 }
 
-/** Force transmitted where the rising MC-01 lift physically contacts the entry rocker. */
+/**
+ * Force transmitted where the MC-01 lift physically contacts the MC-02 rocker.
+ * Both coordinates are in the SAME network; the caller applies equal/opposite
+ * generalized reactions in the same integration step.
+ */
 export function linkedEntryContactForce(rube: RubeState): number {
   const chain = ensureLinkedCascadeState(rube);
-  const rocker = mechDof(chain.network, "entry_rocker");
+  const lift = mechDof(chain.network, MECH_ID.mc01Lift);
+  const rocker = mechDof(chain.network, MECH_ID.entryRocker);
   const contactY = CHAIN.entryContactBaseY + CHAIN.entryRockerArmM * Math.sin(rocker.q);
-  const penetration = Math.max(0, rube.lift.y_m - contactY);
+  const penetration = Math.max(0, lift.q - contactY);
   if (penetration <= 0) return 0;
   const rockerPointVelocity = CHAIN.entryRockerArmM * Math.cos(rocker.q) * rocker.v;
-  const closingVelocity = rube.lift.velocity_mps - rockerPointVelocity;
-  // The release is a trip, not a power transfer. Cap the reciprocal load so MC-01
-  // can move the rocker without the rocker becoming a second hidden lift brake.
+  const closingVelocity = lift.v - rockerPointVelocity;
   return Math.min(900, Math.max(0, 12000 * penetration + 1000 * Math.max(0, closingVelocity)));
 }
 
 function updateEnergy(chain: LinkedCascadeState): void {
   let kinetic = 0;
-  for (const d of chain.network.dofs) kinetic += 0.5 * d.inertia_si * d.v * d.v;
-  const cw = mechDof(chain.network, "transfer_counterweight");
-  const bridge = mechDof(chain.network, "bridge");
+  for (const d of chain.network.dofs) {
+    if (!d.id.startsWith("mc01_")) kinetic += 0.5 * d.inertia_si * d.v * d.v;
+  }
+  const cw = mechDof(chain.network, MECH_ID.transferCounterweight);
+  const bridge = mechDof(chain.network, MECH_ID.bridge);
   const cwHeight = CHAIN.counterweightStartY - cw.q;
   const bridgeComHeight = CHAIN.bridgePivotY + 0.5 * CHAIN.bridgeLengthM * Math.sin(bridge.q);
   const shuttle = springShuttleEnergy(chain);
@@ -165,31 +167,42 @@ function updateEnergy(chain: LinkedCascadeState): void {
 }
 
 /**
- * Advances MC-02/MC-03/MC-04 from shared generalized coordinates and physical contacts.
- * There are no completion flags: lift contact moves the rocker, cable retracts the pawl,
- * gravity drops the counterweight, rope pulls the carriage, carriage contact rotates the
- * second release, gravity lowers the bridge, and the bridge nose retracts the MC-04 pawl.
+ * ONE shared mechanical step for MC-01 -> MC-04.
+ * Mechanism modules contribute forces/constraints; they do not own parallel q/v.
  */
-export function stepLinkedCascade(rube: RubeState, dt: number, entryContactN: number): void {
+export function stepLinkedCascade(
+  rube: RubeState,
+  dt: number,
+  external: GeneralizedForces = {},
+): GeneralizedForces {
   const chain = ensureLinkedCascadeState(rube);
   const net = chain.network;
-  const rocker = mechDof(net, "entry_rocker");
-  const pawl = mechDof(net, "entry_pawl");
-  const carriage = mechDof(net, "transfer_carriage");
-  const counterweight = mechDof(net, "transfer_counterweight");
-  const release = mechDof(net, "bridge_release");
-  const bridgePawl = mechDof(net, "bridge_pawl");
-  const bridge = mechDof(net, "bridge");
-  const springShuttle = mechDof(net, "spring_shuttle");
+  const forces: GeneralizedForces = { ...external };
 
-  const forces: GeneralizedForces = {};
-  addGeneralizedForce(forces, "entry_rocker", entryContactN * CHAIN.entryRockerArmM);
-  // Light pawl return spring; the rocker/cable geometry supplies travel, not brute force.
-  addGeneralizedForce(forces, "entry_pawl", -300 * pawl.q);
-  addGeneralizedForce(forces, "transfer_counterweight", CHAIN.counterweightMassKg * G);
+  const lever = mechDof(net, MECH_ID.mc01Lever);
+  const lift = mechDof(net, MECH_ID.mc01Lift);
+  const rocker = mechDof(net, MECH_ID.entryRocker);
+  const pawl = mechDof(net, MECH_ID.entryPawl);
+  const carriage = mechDof(net, MECH_ID.transferCarriage);
+  const counterweight = mechDof(net, MECH_ID.transferCounterweight);
+  const release = mechDof(net, MECH_ID.bridgeRelease);
+  const bridgePawl = mechDof(net, MECH_ID.bridgePawl);
+  const bridge = mechDof(net, MECH_ID.bridge);
+  const springShuttle = mechDof(net, MECH_ID.springShuttle);
+
+  // MC-01 -> MC-02 is now an actual reciprocal contact inside one solve.
+  const entryContactN = linkedEntryContactForce(rube);
+  addGeneralizedForce(forces, MECH_ID.mc01Lift, -entryContactN);
+  addGeneralizedForce(forces, MECH_ID.entryRocker, entryContactN * CHAIN.entryRockerArmM);
+
+  addGeneralizedForce(forces, MECH_ID.entryPawl, -300 * pawl.q);
+  addGeneralizedForce(forces, MECH_ID.transferCounterweight, CHAIN.counterweightMassKg * G);
   if (Math.abs(carriage.v) > 0.02) {
-    // Rail-car scale rolling resistance, not dry sliding friction.
-    addGeneralizedForce(forces, "transfer_carriage", -0.010 * CHAIN.carriageMassKg * G * Math.sign(carriage.v));
+    addGeneralizedForce(
+      forces,
+      MECH_ID.transferCarriage,
+      -0.010 * CHAIN.carriageMassKg * G * Math.sign(carriage.v),
+    );
   }
 
   const releaseBoundary = CHAIN.bridgeReleaseContactM + CHAIN.bridgeReleaseArmM * Math.sin(release.q);
@@ -199,13 +212,13 @@ export function stepLinkedCascade(rube: RubeState, dt: number, entryContactN: nu
     const releasePointVelocity = CHAIN.bridgeReleaseArmM * Math.cos(release.q) * release.v;
     const closingVelocity = carriage.v - releasePointVelocity;
     bridgeContactN = Math.max(0, 240000 * bridgeContactPenetration + 18000 * Math.max(0, closingVelocity));
-    addGeneralizedForce(forces, "transfer_carriage", -bridgeContactN);
-    addGeneralizedForce(forces, "bridge_release", bridgeContactN * CHAIN.bridgeReleaseArmM);
+    addGeneralizedForce(forces, MECH_ID.transferCarriage, -bridgeContactN);
+    addGeneralizedForce(forces, MECH_ID.bridgeRelease, bridgeContactN * CHAIN.bridgeReleaseArmM);
   }
-  addGeneralizedForce(forces, "bridge_pawl", -16000 * bridgePawl.q);
+  addGeneralizedForce(forces, MECH_ID.bridgePawl, -16000 * bridgePawl.q);
   addGeneralizedForce(
     forces,
-    "bridge",
+    MECH_ID.bridge,
     -CHAIN.bridgeMassKg * G * (CHAIN.bridgeLengthM * 0.5) * Math.cos(bridge.q),
   );
   applySpringShuttleForces(chain, forces);
@@ -216,22 +229,26 @@ export function stepLinkedCascade(rube: RubeState, dt: number, entryContactN: nu
   const beforeSpringShuttleQ = springShuttle.q;
   stepMechanicalNetwork(net, dt, forces);
 
-  const transfer = mechCable(net, "transfer_rope");
+  // Generic network owns the lever coordinate. Latch metadata only changes the
+  // active constraint topology; it never stores a competing angle/velocity.
+  if (rube.lever.latch_engaged) {
+    lever.q = rube.lever.latch_angle_rad;
+    lever.v = 0;
+  }
+
+  const transfer = mechCable(net, MECH_ID.transferRope);
   chain.entry_contact_n = entryContactN;
   chain.bridge_contact_n = bridgeContactN;
   chain.entry_pawl_reaction_n = 0;
   chain.bridge_pawl_reaction_nm = 0;
   chain.transfer_brake_reaction_n = 0;
 
-  // The pawl is a unilateral contact at the mouth of the counterweight guide.
-  // Once the weight has physically escaped the pawl face it cannot be magically recaptured.
   if (beforeCounterweightQ < CHAIN.entryPawlEscapeM && pawl.q < CHAIN.entryPawlClearM && counterweight.q > 0) {
     chain.entry_pawl_reaction_n = Math.max(0, CHAIN.counterweightMassKg * G - transfer.tension_n);
     counterweight.q = 0;
     if (counterweight.v > 0) counterweight.v = 0;
   }
 
-  // Finite static brake: it holds while routed rope demand remains below capacity.
   if (chain.transfer_brake_engaged && transfer.tension_n <= chain.transfer_brake_capacity_n) {
     chain.transfer_brake_reaction_n = transfer.tension_n;
     carriage.q = beforeCarriageQ;
@@ -240,7 +257,6 @@ export function stepLinkedCascade(rube: RubeState, dt: number, entryContactN: nu
     chain.transfer_brake_reaction_n = chain.transfer_brake_capacity_n;
   }
 
-  // Same geometry rule at the drop bridge: pawl can hold only while the bridge is still on its seat.
   if (beforeBridgeQ > CHAIN.bridgeLatchSeatRad && bridgePawl.q < CHAIN.bridgePawlClearM && bridge.q < CHAIN.bridgeInitialRad) {
     chain.bridge_pawl_reaction_nm = Math.max(
       0,
@@ -252,6 +268,9 @@ export function stepLinkedCascade(rube: RubeState, dt: number, entryContactN: nu
 
   enforceSpringShuttleContact(chain, beforeSpringShuttleQ);
   updateEnergy(chain);
+  void lift;
+  void rocker;
+  return forces;
 }
 
 export function linkedCascadeFinite(rube: RubeState): boolean {
@@ -271,15 +290,15 @@ export function linkedCascadeFinite(rube: RubeState): boolean {
 }
 
 export function carriageWorld(rube: RubeState): { x: number; y: number; z: number; vx: number } {
-  const q = mechDof(ensureLinkedCascadeState(rube).network, "transfer_carriage");
+  const q = mechDof(ensureLinkedCascadeState(rube).network, MECH_ID.transferCarriage);
   return { x: CHAIN.carriageStartX + q.q, y: CHAIN.deckY, z: CHAIN.z, vx: q.v };
 }
 
 export function counterweightWorld(rube: RubeState): { x: number; y: number; z: number; vy: number } {
-  const q = mechDof(ensureLinkedCascadeState(rube).network, "transfer_counterweight");
+  const q = mechDof(ensureLinkedCascadeState(rube).network, MECH_ID.transferCounterweight);
   return { x: CHAIN.counterweightX, y: CHAIN.counterweightStartY - q.q, z: CHAIN.z - 4.6, vy: -q.v };
 }
 
 export function bridgeAngle(rube: RubeState): number {
-  return mechDof(ensureLinkedCascadeState(rube).network, "bridge").q;
+  return mechDof(ensureLinkedCascadeState(rube).network, MECH_ID.bridge).q;
 }
