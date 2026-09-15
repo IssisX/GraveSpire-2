@@ -31,7 +31,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
   renderer.toneMappingExposure = 1.32;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(getSettings().fov, 1, 0.08, 160);
+  const camera = new THREE.PerspectiveCamera(getSettings().fov, 1, 0.08, 420);
   const sim = new Simulation();
   const level = buildLevel(scene);
   const player = new Player();
@@ -320,7 +320,15 @@ export function mountGame(canvas: HTMLCanvasElement) {
     accPlayer += dt;
     const STEP = 1 / 60;
     while (accPlayer >= STEP) {
-      player.step(STEP, actions, level.colliders, platformDelta);
+      player.step(
+        STEP,
+        actions,
+        level.colliders,
+        platformDelta,
+        (colliderId, impulseXNs) => {
+          sim.nudgeComposition(colliderId, impulseXNs);
+        },
+      );
       accPlayer -= STEP;
     }
 
@@ -344,8 +352,13 @@ export function mountGame(canvas: HTMLCanvasElement) {
         crouch: player.crouch,
         sprint: player.sprinting,
         forwardAccel: player.forwardAccel,
+        lateralAccel: player.lateralAccel,
+        lateralSpeed: player.lateralSpeed,
         yawRate: player.yawRate / Math.max(dt, 1e-4),
         landed: player.landed,
+        supportLean: player.supportLean,
+        balance: player.balance,
+        parkourMode: player.parkourMode,
       },
       settings,
     );
