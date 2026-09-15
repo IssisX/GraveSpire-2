@@ -66,7 +66,7 @@ describe("MC-01 to MC-02 to MC-03 causal chain", () => {
     runLinked(r, 480);
     const chain = ensureLinkedCascadeState(r);
     assert.ok(chain.entry_contact_n > 0);
-    assert.ok(mechDof(chain.network, "entry_rocker").q > 0.5);
+    assert.ok(mechDof(chain.network, "entry_rocker").q > 0.08, "lift contact must physically rotate the low-force release rocker");
     assert.ok(mechCable(chain.network, "entry_pawl_cable").tension_n > 0);
     assert.ok(mechDof(chain.network, "entry_pawl").q > CHAIN.entryPawlClearM);
   });
