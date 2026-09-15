@@ -1,4 +1,4 @@
-import { DISTRICT_META, type DistrictId, type InspectReading, type WorldState } from "./types.ts";
+import { DISTRICT_META, G, type DistrictId, type InspectReading, type WorldState } from "./types.ts";
 import { gallerySag, liveGalleryCount } from "./missions.ts";
 import { DOCK_LATERAL_M, dockEnvelope } from "./geometry.ts";
 
@@ -10,6 +10,7 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
   const f = state.freight;
   const fr = state.frame;
   const g = state.gate;
+  const r = state.rube;
   switch (id) {
     case "carrier":
       return {
@@ -111,6 +112,73 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
           ? "Removing it changes freight capacity and the hab feed that runs through this cabinet."
           : undefined,
       };
+    case "cascade_lever":
+    case "cascade_latch": {
+      if (!r) break;
+      const effectiveI = r.lever.inertia_kgm2 + r.ballast.mass_kg * r.ballast.s_m * r.ballast.s_m;
+      return {
+        id,
+        title: id === "cascade_latch" ? "MC-01 pivot latch" : "MC-01 balance lever",
+        district: "MC01",
+        lines: [
+          { label: "Lever angle", value: n((r.lever.angle_rad * 180) / Math.PI, 2), unit: "deg", source: "measured", confidence: 0.98 },
+          { label: "Angular speed", value: n(r.lever.omega_radps, 3), unit: "rad/s", source: "measured", confidence: 0.96 },
+          { label: "Net moment", value: n(r.lever.net_torque_nm / 1000, 2), unit: "kN·m", source: "estimated", confidence: 0.82 },
+          { label: "Effective inertia", value: n(effectiveI, 0), unit: "kg·m²", source: "estimated", confidence: 0.9 },
+          { label: "Latch", value: r.lever.latch_engaged ? "caught" : "released", unit: "", source: "measured", confidence: 1 },
+        ],
+        warning: "Rotation comes from actual ballast moment, routed rope reaction and damping. There is no lever-force bonus.",
+      };
+    }
+    case "cascade_ballast": {
+      if (!r) break;
+      const gravityMoment = -r.ballast.mass_kg * G * r.ballast.s_m * Math.cos(r.lever.angle_rad);
+      return {
+        id,
+        title: "MC-01 ballast trolley",
+        district: "MC01",
+        lines: [
+          { label: "Mass", value: n(r.ballast.mass_kg, 0), unit: "kg", source: "measured", confidence: 0.99 },
+          { label: "Moment arm", value: n(r.ballast.s_m, 2), unit: "m", source: "measured", confidence: 0.98 },
+          { label: "Slider speed", value: n(r.ballast.velocity_mps, 2), unit: "m/s", source: "measured", confidence: 0.96 },
+          { label: "Gravity moment", value: n(gravityMoment / 1000, 2), unit: "kN·m", source: "estimated", confidence: 0.9 },
+        ],
+        warning: "Shove applies a bounded impulse. Position, balance and lever torque evolve from the authoritative mechanics step.",
+      };
+    }
+    case "cascade_pulley": {
+      if (!r) break;
+      const rated = r.rope.tension_n / Math.max(1, r.rope.rated_tension_n);
+      return {
+        id,
+        title: "MC-01 transfer sheave",
+        district: "MC01",
+        lines: [
+          { label: "Rope tension", value: n(r.rope.tension_n / 1000, 2), unit: "kN", source: "estimated", confidence: 0.88 },
+          { label: "Routed length", value: n(r.rope.length_m, 3), unit: "m", source: "measured", confidence: 0.96 },
+          { label: "Rest length", value: n(r.rope.rest_length_m, 3), unit: "m", source: "measured", confidence: 0.99 },
+          { label: "Regime", value: r.rope.slack ? "slack" : "tension", unit: "", source: "estimated", confidence: 0.95 },
+          { label: "Rated load", value: n(rated * 100, 0), unit: "%", source: "estimated", confidence: 0.8 },
+        ],
+        warning: "The sheave redirects the same routed tension; there is no scripted multiplier. Rating is diagnostic only: rope fracture is not represented in this reduced cell.",
+      };
+    }
+    case "cascade_lift": {
+      if (!r) break;
+      return {
+        id,
+        title: "MC-01 counterlift platform",
+        district: "MC01",
+        lines: [
+          { label: "Elevation", value: n(r.lift.y_m, 2), unit: "m", source: "measured", confidence: 0.98 },
+          { label: "Vertical speed", value: n(r.lift.velocity_mps, 2), unit: "m/s", source: "measured", confidence: 0.97 },
+          { label: "Moving mass", value: n(r.lift.mass_kg, 0), unit: "kg", source: "estimated", confidence: 0.9 },
+          { label: "Rope tension", value: n(r.rope.tension_n / 1000, 2), unit: "kN", source: "estimated", confidence: 0.88 },
+          { label: "Stored potential", value: n(r.energy.potential_j / 1000, 1), unit: "kJ", source: "estimated", confidence: 0.8 },
+        ],
+        warning: "This platform rises only when routed cable force exceeds weight and damping. It is not keyed to a puzzle-complete flag.",
+      };
+    }
     case "board":
     case "brk_gen":
     case "brk_drive":
@@ -201,6 +269,7 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
       };
     }
   }
+  return null;
 }
 
 export function locationLabel(district: DistrictId): string {
