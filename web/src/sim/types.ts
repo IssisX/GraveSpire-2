@@ -1,13 +1,13 @@
 /** Declared Act I reduction. Not GDD §7 / §16. */
 export const MODEL_CLASS =
-  "Act I reduced: lumped freight/frame/gate coupling + declared elastic members + tension-only cables + finite motors/brakes/pressure + persistent plastic set + one authoritative planar multibody transfer-cascade cell (lever/ballast/routed rope/lift). Not co-rotational FEM, not general 6-DOF contact, not fracture-energy, not Craig–Bampton.";
+  "Act I reduced: lumped freight/frame/gate coupling + declared elastic members + tension-only cables + finite motors/brakes/pressure + persistent plastic set + MC-01 planar lever/ballast/lift + linked generalized-coordinate MC-02/MC-03 rocker/pawl/counterweight/carriage/bridge mechanics. Not co-rotational FEM, not general 6-DOF contact, not fracture-energy, not Craig–Bampton.";
 
 export const AUTHORITY_DT = 1 / 30;
 export const MECHANICS_DT = 1 / 120;
 export const SUBSTEPS = 4;
 export const G = 9.80665;
 
-export type DistrictId = "FS07" | "FS08" | "SHA" | "LT12" | "MC01";
+export type DistrictId = "FS07" | "FS08" | "SHA" | "LT12" | "MC01" | "MC02" | "MC03";
 
 export const DISTRICT_META: Record<
   DistrictId,
@@ -18,6 +18,8 @@ export const DISTRICT_META: Record<
   SHA: { id: "SHA", name: "Circ Shop — Hab Band A", short: "SH-A" },
   LT12: { id: "LT12", name: "Gallery 12", short: "LT-12" },
   MC01: { id: "MC01", name: "Mechanical Cascade 01", short: "MC-01" },
+  MC02: { id: "MC02", name: "Gravity Transfer", short: "MC-02" },
+  MC03: { id: "MC03", name: "Gravity Bridge", short: "MC-03" },
 };
 
 export const COMMANDS = [
@@ -50,6 +52,7 @@ export type Act =
   | { type: "clear_sling" }
   | { type: "rube_push_ballast"; direction: -1 | 1 }
   | { type: "rube_toggle_latch" }
+  | { type: "rube_toggle_transfer_brake" }
   | { type: "mark_save_used" }
   | { type: "end_act" };
 
@@ -123,12 +126,65 @@ export interface RubeEnergyState {
   dissipated_j: number;
 }
 
+export interface MechanicalDofState {
+  id: string;
+  kind: "linear" | "rotary";
+  q: number;
+  v: number;
+  /** kg for linear DOF, kg·m² for rotary DOF. */
+  inertia_si: number;
+  /** N·s/m for linear DOF, N·m·s/rad for rotary DOF. */
+  damping_si: number;
+  min_q: number;
+  max_q: number;
+  stop_restitution: number;
+}
+
+export interface MechanicalCableTerm {
+  dof_id: string;
+  /** dl/dq: dimensionless for linear q, metres/radian for rotary q. */
+  gradient_m_per_q: number;
+}
+
+export interface MechanicalCableState {
+  id: string;
+  base_length_m: number;
+  rest_length_m: number;
+  length_m: number;
+  stiffness_npm: number;
+  damping_ns_pm: number;
+  tension_n: number;
+  slack: boolean;
+  terms: MechanicalCableTerm[];
+}
+
+export interface MechanicalNetworkState {
+  dofs: MechanicalDofState[];
+  cables: MechanicalCableState[];
+  dissipated_j: number;
+}
+
+export interface LinkedCascadeState {
+  network: MechanicalNetworkState;
+  transfer_brake_engaged: boolean;
+  transfer_brake_capacity_n: number;
+  entry_contact_n: number;
+  entry_pawl_reaction_n: number;
+  transfer_brake_reaction_n: number;
+  bridge_contact_n: number;
+  bridge_pawl_reaction_nm: number;
+  kinetic_j: number;
+  potential_j: number;
+}
+
 export interface RubeState {
   lever: RubeLeverState;
   ballast: RubeBallastState;
   lift: RubeLiftState;
   rope: RubeRopeState;
   energy: RubeEnergyState;
+  /** Added lazily for saves written before MC-02 / MC-03 existed. */
+  chain?: LinkedCascadeState;
 }
 
 export interface MemberState {
@@ -276,7 +332,9 @@ export function clamp01(v: number): number {
 }
 
 export function districtAt(x: number, z: number): DistrictId {
-  if (z <= -20 && x >= 46 && x <= 70) return "MC01";
+  if (z <= -25 && x >= 86) return "MC03";
+  if (z <= -25 && x >= 67) return "MC02";
+  if (z <= -20 && x >= 46 && x < 67) return "MC01";
   if (z >= 11) return "LT12";
   if (x >= 64) return "SHA";
   if (x >= 42) return "FS08";

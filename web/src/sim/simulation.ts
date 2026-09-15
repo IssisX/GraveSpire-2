@@ -34,6 +34,7 @@ import {
   rubeFinite,
   stepRubeMechanics,
   toggleRubeLatch,
+  toggleTransferBrake,
 } from "./rube-mechanics.ts";
 
 const kFrameMassKg = 48000.0;
@@ -249,6 +250,11 @@ export class Simulation {
       }
       case "rube_toggle_latch": {
         const msg = toggleRubeLatch(ensureRubeState(s));
+        this.push(msg);
+        return msg;
+      }
+      case "rube_toggle_transfer_brake": {
+        const msg = toggleTransferBrake(ensureRubeState(s));
         this.push(msg);
         return msg;
       }

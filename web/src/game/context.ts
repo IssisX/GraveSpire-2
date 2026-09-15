@@ -27,6 +27,7 @@ export type CtxCommit =
   | "cascade-push-out"
   | "cascade-push-in"
   | "cascade-latch"
+  | "cascade-transfer-brake"
   | "exit-operate"
   | "jump"
   | "mantle";
@@ -84,6 +85,12 @@ const ACTION_RANGE: Record<string, number> = {
   cascade_lever: 3.0,
   cascade_lift: 3.1,
   cascade_pulley: 3.0,
+  cascade_transfer_brake: 2.7,
+  chain_entry_rocker: 3.0,
+  chain_carriage: 3.3,
+  chain_counterweight: 3.4,
+  chain_bridge_release: 3.0,
+  chain_bridge: 4.0,
   machine: 3.0,
   world: 3.0,
 };
@@ -111,8 +118,13 @@ function losBlocked(
     for (const c of colliders) {
       if (c.disabled || ignore.has(c.id)) continue;
       if (c.id === "rail" || c.id.startsWith("stair")) continue;
-      // These are the mechanism surfaces themselves; surrounding hall geometry still occludes.
-      if (c.id.startsWith("cascade_lever_") || c.id === "cascade_ballast_body" || c.id === "cascade_lift_platform") continue;
+      if (
+        c.id.startsWith("cascade_lever_") ||
+        c.id === "cascade_ballast_body" ||
+        c.id === "cascade_lift_platform" ||
+        c.id === "chain_carriage_platform" ||
+        c.id.startsWith("chain_bridge_")
+      ) continue;
       if (x > c.minx && x < c.maxx && y > c.miny && y < c.maxy && z > c.minz && z < c.maxz) return true;
     }
   }
@@ -128,6 +140,13 @@ export function worldWarning(state: WorldState): string | null {
   const rube = state.rube;
   if (rube && rube.rope.tension_n > rube.rope.rated_tension_n * 0.9) {
     return "MC-01 transfer rope is above 90% rated tension.";
+  }
+  const chain = rube?.chain;
+  if (chain) {
+    const transfer = chain.network.cables.find((c) => c.id === "transfer_rope");
+    if (transfer && transfer.tension_n > chain.transfer_brake_capacity_n * 0.9 && chain.transfer_brake_engaged) {
+      return "MC-02 carriage brake is carrying more than 90% of its declared hold capacity.";
+    }
   }
   if (state.freight.brake_temperature_k > 420) return "Brake is cooking. Heat is friction.";
   if (state.gate.wedged) return "G-07 is wedged. The leaf will not take a clean command.";
@@ -206,31 +225,9 @@ export function resolveContext(args: {
   };
 
   if (args.operateId) {
-    push({
-      id: "exit-operate",
-      verb: "Step off",
-      noun: "controls",
-      targetId: args.operateId,
-      kind: "machine",
-      commit: "exit-operate",
-      dist: 0,
-      priority: 40,
-    });
-    if (
-      (args.operateId === "pendant" || args.operateId === "carrier") &&
-      overDock(args.state.freight) &&
-      !args.state.freight.payload_released
-    ) {
-      push({
-        id: "release",
-        verb: "Release",
-        noun: "payload",
-        targetId: "carrier",
-        kind: "machine",
-        commit: "release",
-        dist: 0,
-        priority: 88,
-      });
+    push({ id: "exit-operate", verb: "Step off", noun: "controls", targetId: args.operateId, kind: "machine", commit: "exit-operate", dist: 0, priority: 40 });
+    if ((args.operateId === "pendant" || args.operateId === "carrier") && overDock(args.state.freight) && !args.state.freight.payload_released) {
+      push({ id: "release", verb: "Release", noun: "payload", targetId: "carrier", kind: "machine", commit: "release", dist: 0, priority: 88 });
     }
   }
 
@@ -241,308 +238,75 @@ export function resolveContext(args: {
 
     if (it.id === "cascade_ballast" && s.rube) {
       if (s.rube.ballast.s_m < 3.62) {
-        push({
-          id: "cascade:push-out",
-          verb: "Shove",
-          noun: "ballast outboard",
-          targetId: it.id,
-          kind: "machine",
-          commit: "cascade-push-out",
-          dist,
-          priority: 86,
-        });
+        push({ id: "cascade:push-out", verb: "Shove", noun: "ballast outboard", targetId: it.id, kind: "machine", commit: "cascade-push-out", dist, priority: 86 });
       }
       if (s.rube.ballast.s_m > -3.62) {
-        push({
-          id: "cascade:push-in",
-          verb: "Shove",
-          noun: "ballast inboard",
-          targetId: it.id,
-          kind: "machine",
-          commit: "cascade-push-in",
-          dist,
-          priority: 62,
-        });
+        push({ id: "cascade:push-in", verb: "Shove", noun: "ballast inboard", targetId: it.id, kind: "machine", commit: "cascade-push-in", dist, priority: 62 });
       }
     } else if (it.id === "cascade_latch" && s.rube) {
+      push({ id: "cascade:latch", verb: s.rube.lever.latch_engaged ? "Release" : "Catch", noun: "pivot latch", targetId: it.id, kind: "machine", commit: "cascade-latch", dist, priority: 84 });
+    } else if (it.id === "cascade_transfer_brake" && s.rube?.chain) {
       push({
-        id: "cascade:latch",
-        verb: s.rube.lever.latch_engaged ? "Release" : "Catch",
-        noun: "pivot latch",
+        id: "cascade:transfer-brake",
+        verb: s.rube.chain.transfer_brake_engaged ? "Release" : "Engage",
+        noun: "gravity carriage brake",
         targetId: it.id,
         kind: "machine",
-        commit: "cascade-latch",
+        commit: "cascade-transfer-brake",
         dist,
-        priority: 84,
+        priority: 90,
       });
     } else if (it.kind === "npc" && DIALOGUE[it.id]) {
-      push({
-        id: `talk:${it.id}`,
-        verb: "Talk to",
-        noun: it.label,
-        targetId: it.id,
-        kind: "npc",
-        commit: "talk",
-        dist,
-        priority: 92,
-      });
+      push({ id: `talk:${it.id}`, verb: "Talk to", noun: it.label, targetId: it.id, kind: "npc", commit: "talk", dist, priority: 92 });
     }
 
     if (it.id === "pendant" && args.operateId !== "pendant") {
-      push({
-        id: "operate:pendant",
-        verb: "Operate",
-        noun: "Carrier 07-A",
-        targetId: "pendant",
-        kind: "machine",
-        commit: "operate",
-        dist,
-        priority: s.electrical.carrier_powered ? 86 : 50,
-      });
+      push({ id: "operate:pendant", verb: "Operate", noun: "Carrier 07-A", targetId: "pendant", kind: "machine", commit: "operate", dist, priority: s.electrical.carrier_powered ? 86 : 50 });
     } else if (it.id === "gate" && args.operateId !== "gate") {
-      push({
-        id: "operate:gate",
-        verb: "Operate",
-        noun: "Gate G-07",
-        targetId: "gate",
-        kind: "machine",
-        commit: "operate",
-        dist,
-        priority: s.electrical.gate_powered ? 84 : 48,
-      });
-      if (s.gate.pressure_pa > 180000) {
-        push({
-          id: "vent:gate",
-          verb: "Vent",
-          noun: "Gate G-07",
-          targetId: "gate",
-          kind: "machine",
-          commit: "vent",
-          dist,
-          priority: 70,
-        });
-      }
+      push({ id: "operate:gate", verb: "Operate", noun: "Gate G-07", targetId: "gate", kind: "machine", commit: "operate", dist, priority: s.electrical.gate_powered ? 84 : 48 });
+      if (s.gate.pressure_pa > 180000) push({ id: "vent:gate", verb: "Vent", noun: "Gate G-07", targetId: "gate", kind: "machine", commit: "vent", dist, priority: 70 });
     } else if (it.id === "frame" || it.id === "neck_brace") {
-      if (!s.frame.brace_connected && !s.members.find((m) => m.id === "neck_brace")?.braced) {
-        push({
-          id: "brace:neck",
-          verb: "Brace",
-          noun: "transfer neck",
-          targetId: "neck_brace",
-          kind: "member",
-          commit: "brace",
-          dist,
-          priority: 74,
-        });
-      }
-      if (!s.members.find((m) => m.id === "neck_brace")?.jacked) {
-        push({
-          id: "jack:neck",
-          verb: "Jack",
-          noun: "transfer neck",
-          targetId: "neck_brace",
-          kind: "member",
-          commit: "jack",
-          dist,
-          priority: 68,
-        });
-      }
+      if (!s.frame.brace_connected && !s.members.find((m) => m.id === "neck_brace")?.braced) push({ id: "brace:neck", verb: "Brace", noun: "transfer neck", targetId: "neck_brace", kind: "member", commit: "brace", dist, priority: 74 });
+      if (!s.members.find((m) => m.id === "neck_brace")?.jacked) push({ id: "jack:neck", verb: "Jack", noun: "transfer neck", targetId: "neck_brace", kind: "member", commit: "jack", dist, priority: 68 });
     } else if (it.kind === "member") {
       const mem = s.members.find((m) => m.id === it.id);
       if (mem && !mem.cut) {
-        if (!mem.braced) {
-          push({
-            id: `brace:${it.id}`,
-            verb: "Brace",
-            noun: it.label,
-            targetId: it.id,
-            kind: "member",
-            commit: "brace",
-            dist,
-            priority: 66,
-          });
-        }
-        if (!mem.jacked) {
-          push({
-            id: `jack:${it.id}`,
-            verb: "Jack",
-            noun: it.label,
-            targetId: it.id,
-            kind: "member",
-            commit: "jack",
-            dist,
-            priority: 60,
-          });
-        }
-        push({
-          id: `cut:${it.id}`,
-          verb: "Cut",
-          noun: it.label,
-          targetId: it.id,
-          kind: "member",
-          commit: "cut",
-          dist,
-          priority: 44,
-        });
+        if (!mem.braced) push({ id: `brace:${it.id}`, verb: "Brace", noun: it.label, targetId: it.id, kind: "member", commit: "brace", dist, priority: 66 });
+        if (!mem.jacked) push({ id: `jack:${it.id}`, verb: "Jack", noun: it.label, targetId: it.id, kind: "member", commit: "jack", dist, priority: 60 });
+        push({ id: `cut:${it.id}`, verb: "Cut", noun: it.label, targetId: it.id, kind: "member", commit: "cut", dist, priority: 44 });
       }
     } else if (it.kind === "board" || it.id.startsWith("brk_")) {
-      push({
-        id: `toggle:${it.id}`,
-        verb: "Toggle",
-        noun: it.label.replace(/ breaker$/i, ""),
-        targetId: it.id === "board" ? "brk_shop" : it.id,
-        kind: "board",
-        commit: "toggle",
-        dist,
-        priority: 80,
-      });
+      push({ id: `toggle:${it.id}`, verb: "Toggle", noun: it.label.replace(/ breaker$/i, ""), targetId: it.id === "board" ? "brk_shop" : it.id, kind: "board", commit: "toggle", dist, priority: 80 });
     } else if (it.kind === "bench") {
-      push({
-        id: "bench",
-        verb: s.electrical.shop_powered ? "Use" : "Inspect",
-        noun: "bench",
-        targetId: it.id,
-        kind: "bench",
-        commit: s.electrical.shop_powered ? "bench" : "inspect",
-        dist,
-        priority: 76,
-      });
+      push({ id: "bench", verb: s.electrical.shop_powered ? "Use" : "Inspect", noun: "bench", targetId: it.id, kind: "bench", commit: s.electrical.shop_powered ? "bench" : "inspect", dist, priority: 76 });
     } else if (it.id === "drive" && s.flags.drive_present && !s.flags.drive_recovered && !s.flags.drive_abandoned) {
-      push({
-        id: "recover",
-        verb: "Recover",
-        noun: "drive",
-        targetId: "drive",
-        kind: "machine",
-        commit: "recover",
-        dist,
-        priority: 72,
-      });
+      push({ id: "recover", verb: "Recover", noun: "drive", targetId: "drive", kind: "machine", commit: "recover", dist, priority: 72 });
     } else if (it.id === "dock" || it.id === "carrier") {
-      if (!s.freight.payload_released && overDock(s.freight)) {
-        push({
-          id: "release",
-          verb: "Release",
-          noun: "payload",
-          targetId: "carrier",
-          kind: "machine",
-          commit: "release",
-          dist,
-          priority: 73,
-        });
-      }
+      if (!s.freight.payload_released && overDock(s.freight)) push({ id: "release", verb: "Release", noun: "payload", targetId: "carrier", kind: "machine", commit: "release", dist, priority: 73 });
     }
 
-    if (it.id === "gate") {
-      push({
-        id: "wedge:gate",
-        verb: s.gate.wedged ? "Pull" : "Set",
-        noun: "wedge",
-        targetId: "gate",
-        kind: "machine",
-        commit: "wedge",
-        dist,
-        priority: 52,
-      });
-    }
-
-    if (it.id === "brk_west" && !s.electrical.chen_rerouted) {
-      push({
-        id: "reroute",
-        verb: "Close",
-        noun: "west bus",
-        targetId: "brk_west",
-        kind: "board",
-        commit: "reroute",
-        dist,
-        priority: 88,
-      });
-    }
+    if (it.id === "gate") push({ id: "wedge:gate", verb: s.gate.wedged ? "Pull" : "Set", noun: "wedge", targetId: "gate", kind: "machine", commit: "wedge", dist, priority: 52 });
+    if (it.id === "brk_west" && !s.electrical.chen_rerouted) push({ id: "reroute", verb: "Close", noun: "west bus", targetId: "brk_west", kind: "board", commit: "reroute", dist, priority: 88 });
 
     if (s.cables.some((c) => c.id === "sling") && (it.id === "carrier" || it.id === "dock" || it.id === "frame" || it.kind === "member")) {
-      push({
-        id: "clear-sling",
-        verb: "Clear",
-        noun: "sling",
-        targetId: "sling",
-        kind: "world",
-        commit: "clear-sling",
-        dist,
-        priority: 58,
-      });
+      push({ id: "clear-sling", verb: "Clear", noun: "sling", targetId: "sling", kind: "world", commit: "clear-sling", dist, priority: 58 });
     }
 
     if (args.slingA && args.slingA !== it.id) {
-      if (slingCompatible(args.slingA, it.id)) {
-        push({
-          id: `sling2:${it.id}`,
-          verb: "Attach to",
-          noun: it.label,
-          targetId: it.id,
-          kind: it.kind,
-          commit: "sling2",
-          dist,
-          priority: 90,
-        });
-      }
+      if (slingCompatible(args.slingA, it.id)) push({ id: `sling2:${it.id}`, verb: "Attach to", noun: it.label, targetId: it.id, kind: it.kind, commit: "sling2", dist, priority: 90 });
     } else if (!args.slingA && (it.id === "carrier" || it.id === "dock" || it.id === "frame" || it.kind === "member")) {
-      push({
-        id: `sling:${it.id}`,
-        verb: "Attach sling",
-        noun: it.label,
-        targetId: it.id,
-        kind: it.kind,
-        commit: "sling",
-        dist,
-        priority: 42,
-      });
+      push({ id: `sling:${it.id}`, verb: "Attach sling", noun: it.label, targetId: it.id, kind: it.kind, commit: "sling", dist, priority: 42 });
     }
 
-    push({
-      id: `inspect:${it.id}`,
-      verb: "Inspect",
-      noun: it.label,
-      targetId: it.id,
-      kind: it.kind,
-      commit: "inspect",
-      dist,
-      priority: 28,
-    });
+    push({ id: `inspect:${it.id}`, verb: "Inspect", noun: it.label, targetId: it.id, kind: it.kind, commit: "inspect", dist, priority: 28 });
   } else if (look) {
-    push({
-      id: `inspect:${look.id}`,
-      verb: "Inspect",
-      noun: look.label,
-      targetId: look.id,
-      kind: look.kind,
-      commit: "inspect",
-      dist: look.dist,
-      priority: 22,
-    });
+    push({ id: `inspect:${look.id}`, verb: "Inspect", noun: look.label, targetId: look.id, kind: look.kind, commit: "inspect", dist: look.dist, priority: 22 });
   }
 
   if (args.mantle) {
-    push({
-      id: "mantle",
-      verb: "Mantle",
-      noun: "ledge",
-      targetId: "locomotion",
-      kind: "world",
-      commit: "mantle",
-      dist: 0,
-      priority: 64,
-    });
+    push({ id: "mantle", verb: "Mantle", noun: "ledge", targetId: "locomotion", kind: "world", commit: "mantle", dist: 0, priority: 64 });
   } else if (args.grounded && args.speed > 0.55 && !args.operateId) {
-    push({
-      id: "jump",
-      verb: "Jump",
-      noun: "",
-      targetId: "locomotion",
-      kind: "world",
-      commit: "jump",
-      dist: 0,
-      priority: 18,
-    });
+    push({ id: "jump", verb: "Jump", noun: "", targetId: "locomotion", kind: "world", commit: "jump", dist: 0, priority: 18 });
   }
 
   choices.sort((a, b) => b.priority - a.priority);
@@ -554,21 +318,12 @@ export function resolveContext(args: {
     unique.push(c);
   }
 
-  const primary =
-    unique.find((c) => c.commit !== "inspect" && c.commit !== "jump" && c.commit !== "exit-operate") ??
-    unique.find((c) => c.commit === "inspect") ??
-    unique[0] ??
-    null;
-  const secondary =
-    unique.find((c) => c !== primary && (c.commit === "inspect" || c.commit === "mantle" || c.commit === "jump" || c.commit === "exit-operate")) ??
-    unique.find((c) => c !== primary) ??
-    null;
+  const primary = unique.find((c) => c.commit !== "inspect" && c.commit !== "jump" && c.commit !== "exit-operate") ?? unique.find((c) => c.commit === "inspect") ?? unique[0] ?? null;
+  const secondary = unique.find((c) => c !== primary && (c.commit === "inspect" || c.commit === "mantle" || c.commit === "jump" || c.commit === "exit-operate")) ?? unique.find((c) => c !== primary) ?? null;
 
   return {
     look,
-    action: actionHit
-      ? { id: actionHit.it.id, label: actionHit.it.label, dist: actionHit.dist, kind: actionHit.it.kind }
-      : null,
+    action: actionHit ? { id: actionHit.it.id, label: actionHit.it.label, dist: actionHit.dist, kind: actionHit.it.kind } : null,
     primary,
     secondary,
     choices: unique.slice(0, 5),
@@ -595,116 +350,49 @@ export type CommitBag = {
 export function commitAction(action: CtxAction, bag: CommitBag): void {
   const s = bag.sim.state();
   switch (action.commit) {
-    case "talk": {
-      if (!DIALOGUE[action.targetId]) return;
-      bag.startTalk(action.targetId);
+    case "talk":
+      if (DIALOGUE[action.targetId]) bag.startTalk(action.targetId);
       return;
-    }
-    case "inspect": {
+    case "inspect":
       bag.inspect(action.targetId);
       bag.audio.beep(520, 0.06, 0.06);
       return;
-    }
-    case "operate": {
-      if (action.targetId === "pendant" && !s.electrical.carrier_powered) {
-        bag.flash("Pendant is dead. Carrier has no island.");
-        return;
-      }
-      if (action.targetId === "gate" && !s.electrical.gate_powered) {
-        bag.flash("Gate motor feed is open. The leaf will not take torque.");
-        return;
-      }
+    case "operate":
+      if (action.targetId === "pendant" && !s.electrical.carrier_powered) { bag.flash("Pendant is dead. Carrier has no island."); return; }
+      if (action.targetId === "gate" && !s.electrical.gate_powered) { bag.flash("Gate motor feed is open. The leaf will not take torque."); return; }
       bag.enterOperate(action.targetId);
       bag.audio.clank();
       return;
-    }
-    case "exit-operate":
-      bag.exitOperate();
-      return;
+    case "exit-operate": bag.exitOperate(); return;
     case "toggle": {
       const id = action.targetId === "board" ? "brk_shop" : action.targetId;
       bag.flash(bag.sim.act({ type: "toggle_breaker", id }));
       bag.audio.beep(180, 0.1, 0.1);
       return;
     }
-    case "bench": {
-      if (!s.electrical.shop_powered) {
-        bag.flash("Bench is dead. Shop is not an island yet.");
-        return;
-      }
-      bag.sim.act({ type: "mark_save_used" });
-      bag.persist();
-      bag.flash("Authority snapshot written. The building will not heal.");
-      bag.audio.beep(440, 0.12, 0.1);
-      return;
-    }
-    case "sling":
-      bag.setSlingA(action.targetId);
-      bag.flash(`Sling first attachment: ${action.noun}. Need a compatible second.`);
-      return;
+    case "bench":
+      if (!s.electrical.shop_powered) { bag.flash("Bench is dead. Shop is not an island yet."); return; }
+      bag.sim.act({ type: "mark_save_used" }); bag.persist(); bag.flash("Authority snapshot written. The building will not heal."); bag.audio.beep(440, 0.12, 0.1); return;
+    case "sling": bag.setSlingA(action.targetId); bag.flash(`Sling first attachment: ${action.noun}. Need a compatible second.`); return;
     case "sling2": {
       const msg = bag.sim.act({ type: "sling", a: bag.slingA ?? action.targetId, b: action.targetId });
-      bag.setSlingA(null);
-      bag.flash(msg);
-      bag.audio.clank();
-      return;
+      bag.setSlingA(null); bag.flash(msg); bag.audio.clank(); return;
     }
-    case "cut":
-      bag.startWork(action.targetId, "cut");
-      return;
-    case "brace":
-      bag.startWork(action.targetId, "brace");
-      return;
-    case "jack":
-      bag.flash(bag.sim.act({ type: "jack_member", id: action.targetId, on: true }));
-      bag.audio.clank();
-      return;
-    case "release":
-      bag.flash(bag.sim.act({ type: "carrier_release" }));
-      bag.audio.clank();
-      return;
-    case "recover":
-      bag.flash(bag.sim.act({ type: "recover_drive" }));
-      bag.audio.clank();
-      return;
-    case "vent":
-      bag.sim.setCommand("GateVent", true);
-      window.setTimeout(() => bag.sim.setCommand("GateVent", false), 4000);
-      bag.flash("Venting gate inventory.");
-      bag.audio.hiss();
-      return;
-    case "wedge":
-      bag.sim.setCommand("GateWedge", true);
-      bag.sim.setCommand("GateWedge", false);
-      bag.audio.clank();
-      return;
-    case "reroute":
-      bag.flash(bag.sim.act({ type: "chen_reroute" }));
-      bag.audio.clank();
-      return;
-    case "clear-sling":
-      bag.flash(bag.sim.act({ type: "clear_sling" }));
-      bag.setSlingA(null);
-      bag.audio.clank();
-      return;
-    case "cascade-push-out":
-      bag.flash(bag.sim.act({ type: "rube_push_ballast", direction: 1 }));
-      bag.audio.clank();
-      return;
-    case "cascade-push-in":
-      bag.flash(bag.sim.act({ type: "rube_push_ballast", direction: -1 }));
-      bag.audio.clank();
-      return;
-    case "cascade-latch":
-      bag.flash(bag.sim.act({ type: "rube_toggle_latch" }));
-      bag.audio.clank();
-      return;
-    case "jump":
-      bag.jump();
-      return;
-    case "mantle":
-      bag.mantle();
-      return;
+    case "cut": bag.startWork(action.targetId, "cut"); return;
+    case "brace": bag.startWork(action.targetId, "brace"); return;
+    case "jack": bag.flash(bag.sim.act({ type: "jack_member", id: action.targetId, on: true })); bag.audio.clank(); return;
+    case "release": bag.flash(bag.sim.act({ type: "carrier_release" })); bag.audio.clank(); return;
+    case "recover": bag.flash(bag.sim.act({ type: "recover_drive" })); bag.audio.clank(); return;
+    case "vent": bag.sim.setCommand("GateVent", true); window.setTimeout(() => bag.sim.setCommand("GateVent", false), 4000); bag.flash("Venting gate inventory."); bag.audio.hiss(); return;
+    case "wedge": bag.sim.setCommand("GateWedge", true); bag.sim.setCommand("GateWedge", false); bag.audio.clank(); return;
+    case "reroute": bag.flash(bag.sim.act({ type: "chen_reroute" })); bag.audio.clank(); return;
+    case "clear-sling": bag.flash(bag.sim.act({ type: "clear_sling" })); bag.setSlingA(null); bag.audio.clank(); return;
+    case "cascade-push-out": bag.flash(bag.sim.act({ type: "rube_push_ballast", direction: 1 })); bag.audio.clank(); return;
+    case "cascade-push-in": bag.flash(bag.sim.act({ type: "rube_push_ballast", direction: -1 })); bag.audio.clank(); return;
+    case "cascade-latch": bag.flash(bag.sim.act({ type: "rube_toggle_latch" })); bag.audio.clank(); return;
+    case "cascade-transfer-brake": bag.flash(bag.sim.act({ type: "rube_toggle_transfer_brake" })); bag.audio.clank(); return;
+    case "jump": bag.jump(); return;
+    case "mantle": bag.mantle(); return;
   }
 }
 

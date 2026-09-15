@@ -145,20 +145,44 @@ export class Player {
       }
     }
 
+    // Legacy carrier support remains frame-delta based. New causal mechanisms expose
+    // authoritative surface velocity on their collider and are integrated per player substep.
     if (platformDelta && this.grounded && this.groundedId === "carrier") {
       this.x += platformDelta.x;
       this.y += platformDelta.y;
       this.z += platformDelta.z;
     }
 
-    const steps = Math.max(1, Math.ceil((Math.hypot(this.vx, this.vy, this.vz) * dt) / 0.18));
+    let supportVx = 0;
+    let supportVy = 0;
+    let supportVz = 0;
+    if (this.grounded && this.groundedId) {
+      const support = colliders.find((c) => c.id === this.groundedId && !c.disabled);
+      if (support) {
+        supportVx = support.surfaceVx ?? 0;
+        supportVy = support.surfaceVy ?? 0;
+        supportVz = support.surfaceVz ?? 0;
+        if (
+          support.surfaceAngularZ != null &&
+          support.surfacePivotX != null &&
+          support.surfacePivotY != null
+        ) {
+          const rx = this.x - support.surfacePivotX;
+          const ry = this.y - support.surfacePivotY;
+          supportVx += -support.surfaceAngularZ * ry;
+          supportVy += support.surfaceAngularZ * rx;
+        }
+      }
+    }
+
+    const steps = Math.max(1, Math.ceil((Math.hypot(this.vx + supportVx, this.vy + supportVy, this.vz + supportVz) * dt) / 0.18));
     const sdt = dt / steps;
     for (let i = 0; i < steps; i++) {
       const res = moveCapsule(
         { x: this.x, y: this.y, z: this.z, r: CAP_R, h: wantH },
-        this.vx * sdt,
-        this.vy * sdt,
-        this.vz * sdt,
+        (this.vx + supportVx) * sdt,
+        (this.vy + supportVy) * sdt,
+        (this.vz + supportVz) * sdt,
         colliders,
       );
       this.x = res.x;

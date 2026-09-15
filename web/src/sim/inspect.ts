@@ -1,6 +1,7 @@
 import { DISTRICT_META, G, type DistrictId, type InspectReading, type WorldState } from "./types.ts";
 import { gallerySag, liveGalleryCount } from "./missions.ts";
 import { DOCK_LATERAL_M, dockEnvelope } from "./geometry.ts";
+import { CHAIN } from "./linked-cascade.ts";
 
 function n(v: number, digits = 1): string {
   return v.toFixed(digits);
@@ -11,6 +12,9 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
   const fr = state.frame;
   const g = state.gate;
   const r = state.rube;
+  const chain = r?.chain;
+  const q = (dofId: string) => chain?.network.dofs.find((d) => d.id === dofId);
+  const cable = (cableId: string) => chain?.network.cables.find((c) => c.id === cableId);
   switch (id) {
     case "carrier":
       return {
@@ -177,6 +181,105 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
           { label: "Stored potential", value: n(r.energy.potential_j / 1000, 1), unit: "kJ", source: "estimated", confidence: 0.8 },
         ],
         warning: "This platform rises only when routed cable force exceeds weight and damping. It is not keyed to a puzzle-complete flag.",
+      };
+    }
+    case "chain_entry_rocker": {
+      if (!chain) break;
+      const rocker = q("entry_rocker");
+      const pawl = q("entry_pawl");
+      const pull = cable("entry_pawl_cable");
+      if (!rocker || !pawl || !pull) break;
+      return {
+        id,
+        title: "MC-02 entry release rocker",
+        district: "MC02",
+        lines: [
+          { label: "Lift contact", value: n(chain.entry_contact_n / 1000, 1), unit: "kN", source: "estimated", confidence: 0.86 },
+          { label: "Rocker angle", value: n((rocker.q * 180) / Math.PI, 1), unit: "deg", source: "measured", confidence: 0.97 },
+          { label: "Pawl retract", value: n(pawl.q * 1000, 0), unit: "mm", source: "measured", confidence: 0.97 },
+          { label: "Release cable", value: n(pull.tension_n / 1000, 1), unit: "kN", source: "estimated", confidence: 0.88 },
+        ],
+        warning: "MC-01 does not unlock this mechanism. Its rising lift physically bears on this rocker; the rocker tensions a cable that retracts the pawl.",
+      };
+    }
+    case "cascade_transfer_brake":
+    case "chain_carriage": {
+      if (!chain) break;
+      const carriage = q("transfer_carriage");
+      const transfer = cable("transfer_rope");
+      if (!carriage || !transfer) break;
+      return {
+        id,
+        title: id === "cascade_transfer_brake" ? "MC-02 finite carriage brake" : "MC-02 gravity transfer carriage",
+        district: "MC02",
+        lines: [
+          { label: "Travel", value: n(carriage.q, 2), unit: "m", source: "measured", confidence: 0.98 },
+          { label: "Speed", value: n(carriage.v, 2), unit: "m/s", source: "measured", confidence: 0.97 },
+          { label: "Moving mass", value: n(CHAIN.carriageMassKg / 1000, 1), unit: "t", source: "estimated", confidence: 0.94 },
+          { label: "Rope tension", value: n(transfer.tension_n / 1000, 1), unit: "kN", source: "estimated", confidence: 0.9 },
+          { label: "Brake", value: chain.transfer_brake_engaged ? "engaged" : "released", unit: "", source: "measured", confidence: 1 },
+          { label: "Brake reaction", value: n(chain.transfer_brake_reaction_n / 1000, 1), unit: "kN", source: "estimated", confidence: 0.84 },
+        ],
+        warning: "The brake has finite holding capacity. When released, the carriage moves only if the falling counterweight and rope forces overcome inertia, rolling loss, and reactions.",
+      };
+    }
+    case "chain_counterweight": {
+      if (!chain) break;
+      const cw = q("transfer_counterweight");
+      const transfer = cable("transfer_rope");
+      if (!cw || !transfer) break;
+      return {
+        id,
+        title: "MC-02 transfer counterweight",
+        district: "MC02",
+        lines: [
+          { label: "Mass", value: n(CHAIN.counterweightMassKg / 1000, 1), unit: "t", source: "estimated", confidence: 0.96 },
+          { label: "Descent", value: n(cw.q, 2), unit: "m", source: "measured", confidence: 0.98 },
+          { label: "Speed", value: n(cw.v, 2), unit: "m/s", source: "measured", confidence: 0.97 },
+          { label: "Weight", value: n((CHAIN.counterweightMassKg * G) / 1000, 1), unit: "kN", source: "estimated", confidence: 0.98 },
+          { label: "Rope tension", value: n(transfer.tension_n / 1000, 1), unit: "kN", source: "estimated", confidence: 0.9 },
+          { label: "Pawl reaction", value: n(chain.entry_pawl_reaction_n / 1000, 1), unit: "kN", source: "estimated", confidence: 0.84 },
+        ],
+        warning: "This mass is the prime mover. There is no carriage motor hiding behind the animation.",
+      };
+    }
+    case "chain_bridge_release": {
+      if (!chain) break;
+      const release = q("bridge_release");
+      const pawl = q("bridge_pawl");
+      const pull = cable("bridge_pawl_cable");
+      if (!release || !pawl || !pull) break;
+      return {
+        id,
+        title: "MC-03 bridge release rocker",
+        district: "MC03",
+        lines: [
+          { label: "Carriage contact", value: n(chain.bridge_contact_n / 1000, 1), unit: "kN", source: "estimated", confidence: 0.84 },
+          { label: "Rocker angle", value: n((release.q * 180) / Math.PI, 1), unit: "deg", source: "measured", confidence: 0.97 },
+          { label: "Pawl retract", value: n(pawl.q * 1000, 0), unit: "mm", source: "measured", confidence: 0.97 },
+          { label: "Release cable", value: n(pull.tension_n / 1000, 1), unit: "kN", source: "estimated", confidence: 0.88 },
+        ],
+        warning: "The arriving 30-ton carriage physically contacts this rocker. That contact, not a progression flag, pulls the bridge pawl clear.",
+      };
+    }
+    case "chain_bridge": {
+      if (!chain) break;
+      const bridge = q("bridge");
+      if (!bridge) break;
+      const gravityMoment = -CHAIN.bridgeMassKg * G * (CHAIN.bridgeLengthM * 0.5) * Math.cos(bridge.q);
+      return {
+        id,
+        title: "MC-03 gravity bridge",
+        district: "MC03",
+        lines: [
+          { label: "Angle", value: n((bridge.q * 180) / Math.PI, 1), unit: "deg", source: "measured", confidence: 0.98 },
+          { label: "Angular speed", value: n(bridge.v, 3), unit: "rad/s", source: "measured", confidence: 0.97 },
+          { label: "Mass", value: n(CHAIN.bridgeMassKg / 1000, 1), unit: "t", source: "estimated", confidence: 0.95 },
+          { label: "Gravity moment", value: n(gravityMoment / 1000, 1), unit: "kN·m", source: "estimated", confidence: 0.91 },
+          { label: "Pawl reaction", value: n(chain.bridge_pawl_reaction_nm / 1000, 1), unit: "kN·m", source: "estimated", confidence: 0.84 },
+          { label: "Chain energy", value: n((chain.kinetic_j + chain.potential_j) / 1000, 1), unit: "kJ", source: "estimated", confidence: 0.78 },
+        ],
+        warning: "Once the physical pawl leaves its seat, gravity owns the bridge. Its moving collision surface is the route the player walks on.",
       };
     }
     case "board":

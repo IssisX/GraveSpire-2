@@ -8,6 +8,14 @@ export type Collider = {
   maxz: number;
   platform?: "carrier" | "gate";
   disabled?: boolean;
+  /** Authoritative surface velocity for moving supports. */
+  surfaceVx?: number;
+  surfaceVy?: number;
+  surfaceVz?: number;
+  /** Optional planar angular support velocity around a world-space pivot. */
+  surfaceAngularZ?: number;
+  surfacePivotX?: number;
+  surfacePivotY?: number;
 };
 
 export type Capsule = {

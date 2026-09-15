@@ -1,4 +1,14 @@
 import { G, clamp, type RubeState } from "./types.ts";
+import {
+  createLinkedCascadeState,
+  ensureLinkedCascadeState,
+  linkedCascadeFinite,
+  linkedEntryContactForce,
+  stepLinkedCascade,
+  toggleTransferBrake,
+} from "./linked-cascade.ts";
+
+export { toggleTransferBrake } from "./linked-cascade.ts";
 
 /**
  * Transfer Cascade M-01 is a deliberately reduced planar multibody cell.
@@ -108,6 +118,7 @@ export function createRubeState(): RubeState {
       potential_j: 0,
       dissipated_j: 0,
     },
+    chain: createLinkedCascadeState(),
   };
   const l0 = ropeGeometry(base).length;
   // Small initial slack: the latch, not phantom cable tension, holds the rig at spawn.
@@ -118,6 +129,7 @@ export function createRubeState(): RubeState {
 
 export function ensureRubeState(world: { rube?: RubeState }): RubeState {
   if (!world.rube) world.rube = createRubeState();
+  ensureLinkedCascadeState(world.rube);
   return world.rube;
 }
 
@@ -153,6 +165,8 @@ function ropeTension(rube: RubeState, dt: number) {
 }
 
 export function stepRubeMechanics(rube: RubeState, dt: number): void {
+  ensureLinkedCascadeState(rube);
+  const entryContactN = linkedEntryContactForce(rube);
   const a = rube.lever.angle_rad;
 
   // Ballast is a massive wheeled trolley constrained to the lever axis.
@@ -213,12 +227,17 @@ export function stepRubeMechanics(rube: RubeState, dt: number): void {
   }
 
   // Re-evaluate routed length after the lever update, then solve the lift's vertical DOF.
+  // MC-02 entry contact is reciprocal: the rocker load pushes back on this lift.
   const rope = ropeTension(rube, dt);
   const liftDx = rope.pulley.x - rope.lift.x;
   const liftDy = rope.pulley.y - rope.lift.y;
   const liftD = Math.hypot(liftDx, liftDy) || 1;
   const liftFy = rope.tension * liftDy / liftD;
-  const liftForce = liftFy - rube.lift.mass_kg * G - CASCADE.liftDampingNsPm * rube.lift.velocity_mps;
+  const liftForce =
+    liftFy -
+    rube.lift.mass_kg * G -
+    CASCADE.liftDampingNsPm * rube.lift.velocity_mps -
+    entryContactN;
   rube.lift.velocity_mps += (liftForce / rube.lift.mass_kg) * dt;
   rube.lift.y_m += rube.lift.velocity_mps * dt;
   if (rube.lift.y_m <= CASCADE.liftMinY) {
@@ -243,6 +262,8 @@ export function stepRubeMechanics(rube: RubeState, dt: number): void {
     0.5 * rube.lift.mass_kg * sq(rube.lift.velocity_mps);
   const bw = ballastWorld(rube);
   rube.energy.potential_j = rube.ballast.mass_kg * G * bw.y + rube.lift.mass_kg * G * rube.lift.y_m;
+
+  stepLinkedCascade(rube, dt, entryContactN);
 }
 
 export function rubeFinite(rube: RubeState): boolean {
@@ -258,5 +279,5 @@ export function rubeFinite(rube: RubeState): boolean {
     rube.rope.tension_n,
     rube.energy.kinetic_j,
     rube.energy.potential_j,
-  ].every(Number.isFinite);
+  ].every(Number.isFinite) && linkedCascadeFinite(rube);
 }
