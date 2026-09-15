@@ -19,7 +19,7 @@ export const CASCADE = {
   ballastMaxM: 3.65,
   liftX: 64.0,
   liftMinY: 0.48,
-  liftMaxY: 4.58,
+  liftMaxY: 2.50,
   liftMassKg: 760.0,
   pulleyX: 61.5,
   pulleyY: 6.4,
@@ -28,8 +28,10 @@ export const CASCADE = {
   ropeRatedN: 7.2e4,
   pivotDampingNms: 8.0e3,
   liftDampingNsPm: 1.1e3,
-  sliderMuStatic: 0.24,
-  sliderMuKinetic: 0.18,
+  // The ballast rides on wheels constrained to the beam: use rolling-resistance scale,
+  // not dry sliding-friction values. Static resistance still prevents micro-creep.
+  sliderMuStatic: 0.035,
+  sliderMuKinetic: 0.025,
   ballastPushImpulseNs: 1.8e3,
 } as const;
 
@@ -153,8 +155,8 @@ function ropeTension(rube: RubeState, dt: number) {
 export function stepRubeMechanics(rube: RubeState, dt: number): void {
   const a = rube.lever.angle_rad;
 
-  // Ballast is a massive trolley constrained to slide along the lever axis.
-  // Gravity component and Coulomb friction determine whether it sticks/slides.
+  // Ballast is a massive wheeled trolley constrained to the lever axis.
+  // Gravity component and rolling resistance determine whether it holds or rolls.
   const normal = rube.ballast.mass_kg * G * Math.max(0.1, Math.cos(a));
   const gravityAlong = -rube.ballast.mass_kg * G * Math.sin(a);
   const staticLimit = CASCADE.sliderMuStatic * normal;
