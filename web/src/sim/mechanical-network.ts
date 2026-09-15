@@ -18,6 +18,51 @@ export function addGeneralizedForce(forces: GeneralizedForces, id: string, value
   forces[id] = (forces[id] ?? 0) + value;
 }
 
+/**
+ * Generic over-center retaining topology. Once the coordinate physically crosses
+ * the over-center point, its lower stop moves to the retained side of the cam.
+ * The DOF remains the sole q/v authority; no parallel completion boolean exists.
+ */
+export function retainOverCenter(
+  dof: MechanicalDofState,
+  overCenterQ: number,
+  retainedMinQ: number,
+): boolean {
+  if (dof.min_q < retainedMinQ && dof.q >= overCenterQ) {
+    dof.min_q = retainedMinQ;
+    if (dof.q < retainedMinQ) dof.q = retainedMinQ;
+    if (dof.v < 0) dof.v = 0;
+  }
+  return dof.min_q >= retainedMinQ;
+}
+
+/**
+ * Energy-direction preserving one-way transmission. Input motion may accelerate
+ * an output only while it is overtaking that output; reaction torque is bounded
+ * by the finite force the upstream machine can actually supply.
+ */
+export function oneWayClutchTorque(args: {
+  inputVelocity: number;
+  outputVelocity: number;
+  ratioOutputPerInput: number;
+  couplingNms: number;
+  maxTorqueNm: number;
+  maxInputForceN: number;
+}): number {
+  const ratio = Math.max(1e-6, Math.abs(args.ratioOutputPerInput));
+  const driven = args.ratioOutputPerInput * args.inputVelocity;
+  const slip = driven - args.outputVelocity;
+  if (slip <= 0 || args.maxInputForceN <= 0) return 0;
+  return Math.max(
+    0,
+    Math.min(
+      args.couplingNms * slip,
+      args.maxTorqueNm,
+      args.maxInputForceN / ratio,
+    ),
+  );
+}
+
 export function cableLength(network: MechanicalNetworkState, cable: MechanicalCableState): number {
   let l = cable.base_length_m;
   for (const term of cable.terms) l += term.gradient_m_per_q * mechDof(network, term.dof_id).q;
