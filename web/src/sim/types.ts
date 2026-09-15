@@ -1,13 +1,13 @@
 /** Declared Act I reduction. Not GDD §7 / §16. */
 export const MODEL_CLASS =
-  "Act I reduced: lumped freight/frame/gate coupling + declared elastic members + tension-only cables + finite motors/brakes/pressure + persistent plastic set + one shared generalized-coordinate mechanical network spanning MC-01 lever/ballast/lift/rope, MC-02 rocker/pawl/counterweight/carriage, MC-03 bridge release/bridge, and MC-04 spring shuttle. Legacy MC-01 fields are compatibility projections only, not solver authority. Not co-rotational FEM, not general 6-DOF contact, not fracture-energy, not Craig–Bampton.";
+  "Act I reduced: lumped freight/frame/gate coupling + declared elastic members + tension-only cables + finite motors/brakes/pressure + persistent plastic set + one shared generalized-coordinate mechanical network spanning MC-01 lever/ballast/lift/rope, MC-02 rocker/pawl/counterweight/carriage, MC-03 bridge release/bridge, MC-04 spring shuttle, MC-05 bascule/65 t travelling ballast/transfer table, and MC-06 momentum rotor/radial bridge/drop weight. Legacy MC-01 fields are compatibility projections only, not solver authority. Not co-rotational FEM, not general 6-DOF contact, not fracture-energy, not Craig–Bampton.";
 
 export const AUTHORITY_DT = 1 / 30;
 export const MECHANICS_DT = 1 / 120;
 export const SUBSTEPS = 4;
 export const G = 9.80665;
 
-export type DistrictId = "FS07" | "FS08" | "SHA" | "LT12" | "MC01" | "MC02" | "MC03" | "MC04";
+export type DistrictId = "FS07" | "FS08" | "SHA" | "LT12" | "MC01" | "MC02" | "MC03" | "MC04" | "MC05" | "MC06";
 
 export const DISTRICT_META: Record<
   DistrictId,
@@ -21,6 +21,8 @@ export const DISTRICT_META: Record<
   MC02: { id: "MC02", name: "Gravity Transfer", short: "MC-02" },
   MC03: { id: "MC03", name: "Gravity Bridge", short: "MC-03" },
   MC04: { id: "MC04", name: "Spring Shuttle", short: "MC-04" },
+  MC05: { id: "MC05", name: "Bascule Exchange", short: "MC-05" },
+  MC06: { id: "MC06", name: "Momentum Rotunda", short: "MC-06" },
 };
 
 export const COMMANDS = [
@@ -36,6 +38,14 @@ export const COMMANDS = [
   "GateOpen",
   "GateClose",
   "GateWedge",
+  "BasculeTableEast",
+  "BasculeTableWest",
+  "BasculeBallastIn",
+  "BasculeBallastOut",
+  "BasculeBrake",
+  "RotorBridgeIn",
+  "RotorBridgeOut",
+  "RotorBrake",
 ] as const;
 
 export type Command = (typeof COMMANDS)[number];
@@ -342,6 +352,8 @@ export function clamp01(v: number): number {
 }
 
 export function districtAt(x: number, z: number): DistrictId {
+  if (z <= -25 && x >= 150) return "MC06";
+  if (z <= -25 && x >= 116) return "MC05";
   if (z <= -25 && x >= 98) return "MC04";
   if (z <= -25 && x >= 86) return "MC03";
   if (z <= -25 && x >= 67) return "MC02";
