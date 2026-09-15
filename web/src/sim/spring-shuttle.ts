@@ -1,6 +1,11 @@
 import { G, clamp, type LinkedCascadeState, type MechanicalDofState } from "./types.ts";
 import { addGeneralizedForce, mechDof, type GeneralizedForces } from "./mechanical-network.ts";
 import { MECH_ID } from "./mechanical-ids.ts";
+import {
+  applyVerticalSpineForces,
+  enforceVerticalSpineConstraints,
+  ensureVerticalSpineState,
+} from "./vertical-spine.ts";
 
 export const SPRING_SHUTTLE = {
   massKg: 12000.0,
@@ -53,6 +58,7 @@ export function ensureSpringShuttleState(chain: LinkedCascadeState): void {
     max_q: SPRING_SHUTTLE.travelM,
     stop_restitution: 0.12,
   });
+  ensureVerticalSpineState(chain);
 }
 
 /**
@@ -84,6 +90,10 @@ export function applySpringShuttleForces(chain: LinkedCascadeState, forces: Gene
 
   const springUpN = SPRING_SHUTTLE.springPreloadN + SPRING_SHUTTLE.springK * shuttle.q;
   addGeneralizedForce(forces, MECH_ID.springShuttle, SPRING_SHUTTLE.massKg * G - springUpN);
+
+  // MC-07/08 contribute forces to this SAME GeneralizedForces object before
+  // linked-cascade performs the one authoritative mechanical-network step.
+  applyVerticalSpineForces(chain, forces);
 }
 
 /** Pawl is unilateral: while its face blocks the guide, the shuttle cannot descend. */
@@ -95,6 +105,7 @@ export function enforceSpringShuttleContact(chain: LinkedCascadeState, beforeQ: 
     shuttle.q = 0;
     if (shuttle.v > 0) shuttle.v = 0;
   }
+  enforceVerticalSpineConstraints(chain);
 }
 
 export function springShuttleWorld(chain: LinkedCascadeState): { x: number; y: number; z: number; vy: number } {
