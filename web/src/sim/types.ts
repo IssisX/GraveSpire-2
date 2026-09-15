@@ -1,13 +1,13 @@
 /** Declared Act I reduction. Not GDD §7 / §16. */
 export const MODEL_CLASS =
-  "Act I reduced: lumped freight/frame/gate coupling + declared elastic members + tension-only cables + finite motors/brakes/pressure + persistent plastic set + one shared generalized-coordinate mechanical network spanning MC-01 lever/ballast/lift/rope, MC-02 rocker/pawl/counterweight/carriage, MC-03 bridge release/bridge, MC-04 spring shuttle, MC-05 bascule/65 t travelling ballast/transfer table, MC-06 momentum rotor/radial bridge/drop weight, MC-07 counterbalanced vertical freight pair/tilting cradle, and MC-08 torsion annulus/eccentric ballast/helical lift. Legacy MC-01 fields are compatibility projections only, not solver authority. Not co-rotational FEM, not general 6-DOF contact, not fracture-energy, not Craig–Bampton.";
+  "Act I reduced: lumped freight/frame/gate coupling + declared elastic members + tension-only cables + finite motors/brakes/pressure + persistent plastic set + one shared generalized-coordinate mechanical network spanning MC-01 lever/ballast/lift/rope, MC-02 rocker/pawl/counterweight/carriage, MC-03 bridge release/bridge, MC-04 spring shuttle, MC-05 bascule/65 t travelling ballast/transfer table, MC-06 momentum rotor/radial bridge/drop weight, MC-07 counterbalanced vertical freight pair/tilting cradle, MC-08 torsion annulus/eccentric ballast/helical lift, MC-09 80 t pressure ascender, and MC-10 flywheel/centrifugal governor/transfer span. Legacy MC-01 fields are compatibility projections only, not solver authority. Not co-rotational FEM, not general 6-DOF contact, not fracture-energy, not Craig–Bampton.";
 
 export const AUTHORITY_DT = 1 / 30;
 export const MECHANICS_DT = 1 / 120;
 export const SUBSTEPS = 4;
 export const G = 9.80665;
 
-export type DistrictId = "FS07" | "FS08" | "SHA" | "LT12" | "MC01" | "MC02" | "MC03" | "MC04" | "MC05" | "MC06" | "MC07" | "MC08";
+export type DistrictId = "FS07" | "FS08" | "SHA" | "LT12" | "MC01" | "MC02" | "MC03" | "MC04" | "MC05" | "MC06" | "MC07" | "MC08" | "MC09" | "MC10";
 
 export const DISTRICT_META: Record<
   DistrictId,
@@ -25,6 +25,8 @@ export const DISTRICT_META: Record<
   MC06: { id: "MC06", name: "Momentum Rotunda", short: "MC-06" },
   MC07: { id: "MC07", name: "Counterbalanced Throat", short: "MC-07" },
   MC08: { id: "MC08", name: "Torsion Stack", short: "MC-08" },
+  MC09: { id: "MC09", name: "Pressure Ascender", short: "MC-09" },
+  MC10: { id: "MC10", name: "Centrifugal Crown", short: "MC-10" },
 };
 
 export const COMMANDS = [
@@ -354,6 +356,8 @@ export function clamp01(v: number): number {
 }
 
 export function districtAt(x: number, z: number): DistrictId {
+  if (z <= -25 && x >= 220) return "MC10";
+  if (z <= -25 && x >= 201) return "MC09";
   if (z <= -25 && x >= 184) return "MC08";
   if (z <= -25 && x >= 169) return "MC07";
   if (z <= -25 && x >= 150) return "MC06";
