@@ -6,6 +6,7 @@ import { mechDof } from "@/sim/mechanical-network.ts";
 import type { Collider } from "./collision.ts";
 import type { Level } from "./level.ts";
 import { makeSignTexture } from "./materials.ts";
+import { applyUpperCascadeCoupling } from "./upper-world.ts";
 
 type ShuttleBindings = {
   root: THREE.Group;
@@ -78,8 +79,6 @@ function ensureWorld(level: Level): ShuttleBindings {
   sign.position.set(100.7, 6.2, -39.42);
   root.add(sign);
 
-  // The existing MC-03 apron is the lower boarding level. Above the bulkhead,
-  // a new catwalk continues east into the next machine line.
   addBox(level, root, 13.0, 0.32, 4.2, 110.0, SPRING_SHUTTLE.upperY - 0.16, SPRING_SHUTTLE.z, mats.grating, "spring_upper_catwalk");
   addBox(level, root, 0.30, 3.0, 0.30, 99.9, 6.5, SPRING_SHUTTLE.z - 1.9, mats.steelDark, undefined, false);
   addBox(level, root, 0.30, 3.0, 0.30, 103.7, 6.5, SPRING_SHUTTLE.z - 1.9, mats.steelDark, undefined, false);
@@ -110,14 +109,11 @@ function ensureWorld(level: Level): ShuttleBindings {
   };
   level.colliders.push(platformCol);
 
-  // Visible release follower beside the bridge nose. Its travel is driven by bridge geometry.
   const latch = new THREE.Mesh(geo(level, new THREE.BoxGeometry(0.24, 0.58, 0.34)), mats.steel);
   latch.position.set(95.8, 2.75, SPRING_SHUTTLE.z + 1.5);
   root.add(latch);
   addBox(level, root, 1.1, 0.18, 0.18, 96.2, 2.42, SPRING_SHUTTLE.z + 1.5, mats.hazard, undefined, false);
 
-  // A visible preloaded spring column. The authority is the generalized-coordinate spring;
-  // this geometry only communicates compression/extension to the player.
   const spring = new THREE.Group();
   const springMat = new THREE.MeshStandardMaterial({ color: 0x8f9ca6, metalness: 0.82, roughness: 0.28 });
   for (let i = 0; i < 12; i++) {
@@ -160,9 +156,10 @@ export function applySpringShuttleCoupling(level: Level, sim: Simulation): void 
   b.platformCol.surfaceVz = 0;
 
   b.latch.position.y = 2.75 + latch.q * 2.2;
-
   const compression = Math.max(0.18, shuttle.q / SPRING_SHUTTLE.travelM);
   const springHeight = 1.1 + compression * 5.2;
   b.spring.position.y = SPRING_SHUTTLE.lowerY + 0.12;
   b.spring.scale.y = springHeight;
+
+  applyUpperCascadeCoupling(level, sim);
 }
