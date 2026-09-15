@@ -28,6 +28,13 @@ import {
   liveGalleryCount,
   neckWalkClear,
 } from "./missions.ts";
+import {
+  ensureRubeState,
+  pushBallast,
+  rubeFinite,
+  stepRubeMechanics,
+  toggleRubeLatch,
+} from "./rube-mechanics.ts";
 
 const kFrameMassKg = 48000.0;
 const kFrameBaseStiffnessNpm = 7.5e6;
@@ -58,6 +65,7 @@ export class Simulation {
 
   constructor(state?: WorldState) {
     this.state_ = state ? cloneState(state) : createInitialState();
+    ensureRubeState(this.state_);
     this.commands_ = COMMANDS.map(() => false);
     this.lastGood_ = cloneState(this.state_);
   }
@@ -234,6 +242,16 @@ export class Simulation {
         this.push("Sling cleared.");
         return "Sling cleared.";
       }
+      case "rube_push_ballast": {
+        const msg = pushBallast(ensureRubeState(s), action.direction);
+        this.push(msg);
+        return msg;
+      }
+      case "rube_toggle_latch": {
+        const msg = toggleRubeLatch(ensureRubeState(s));
+        this.push(msg);
+        return msg;
+      }
       case "mark_save_used": {
         s.flags.save_used = true;
         return "Bench used.";
@@ -384,6 +402,8 @@ export class Simulation {
 
     gate.seal_misalignment_m = 0.62 * frame.deflection_m + 0.85 * frame.twist_rad;
     freight.brake_temperature_k += (293.15 - freight.brake_temperature_k) * 0.035 * dt;
+
+    stepRubeMechanics(ensureRubeState(this.state_), dt);
     this.state_.mechanics_step += 1;
   }
 
@@ -510,7 +530,8 @@ export class Simulation {
 
   replaceState(state: WorldState): void {
     this.state_ = cloneState(state);
-    this.lastGood_ = cloneState(state);
+    ensureRubeState(this.state_);
+    this.lastGood_ = cloneState(this.state_);
   }
 
   finite(): boolean {
@@ -522,7 +543,8 @@ export class Simulation {
       Number.isFinite(s.frame.twist_rad) &&
       Number.isFinite(s.frame.damage) &&
       Number.isFinite(s.gate.angle_rad) &&
-      Number.isFinite(s.gate.pressure_pa)
+      Number.isFinite(s.gate.pressure_pa) &&
+      rubeFinite(ensureRubeState(s))
     );
   }
 }
