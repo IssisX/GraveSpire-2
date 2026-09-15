@@ -38,6 +38,22 @@ export function TouchControls({ handleRef }: { handleRef: MutableRefObject<GameH
             </>
           )}
           {kind === "frame" && <Hold label="Jack" code="KeyR" handleRef={handleRef} />}
+          {kind === "bascule" && (
+            <>
+              <Hold label="Table →" code="KeyR" handleRef={handleRef} />
+              <Hold label="Table ←" code="KeyF" handleRef={handleRef} />
+              <Hold label="Ballast In" code="KeyZ" handleRef={handleRef} />
+              <Hold label="Ballast Out" code="KeyX" handleRef={handleRef} />
+              <Hold label="Brake" code="KeyB" handleRef={handleRef} />
+            </>
+          )}
+          {kind === "rotor" && (
+            <>
+              <Hold label="Bridge In" code="KeyZ" handleRef={handleRef} />
+              <Hold label="Bridge Out" code="KeyX" handleRef={handleRef} />
+              <Hold label="Brake" code="KeyB" handleRef={handleRef} />
+            </>
+          )}
         </div>
       )}
 
