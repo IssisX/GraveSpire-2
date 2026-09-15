@@ -44,13 +44,7 @@ export type CtxAction = {
   priority: number;
 };
 
-export type LookInfo = {
-  id: string;
-  label: string;
-  dist: number;
-  kind: Interactable["kind"];
-};
-
+export type LookInfo = { id: string; label: string; dist: number; kind: Interactable["kind"] };
 export type CtxFrame = {
   look: LookInfo | null;
   action: LookInfo | null;
@@ -91,6 +85,14 @@ const ACTION_RANGE: Record<string, number> = {
   chain_counterweight: 3.4,
   chain_bridge_release: 3.0,
   chain_bridge: 4.0,
+  mc05_station: 2.55,
+  mc05_bascule: 3.6,
+  mc05_ballast: 3.4,
+  mc05_table: 3.6,
+  mc06_station: 2.55,
+  mc06_rotor: 3.4,
+  mc06_bridge: 3.8,
+  mc06_dropweight: 4.0,
   machine: 3.0,
   world: 3.0,
 };
@@ -123,7 +125,11 @@ function losBlocked(
         c.id === "cascade_ballast_body" ||
         c.id === "cascade_lift_platform" ||
         c.id === "chain_carriage_platform" ||
-        c.id.startsWith("chain_bridge_")
+        c.id.startsWith("chain_bridge_") ||
+        c.id.startsWith("mc05_bascule_") ||
+        c.id === "mc05_table_platform" ||
+        c.id.startsWith("mc06_bridge_") ||
+        c.id === "mc06_dropweight_body"
       ) continue;
       if (x > c.minx && x < c.maxx && y > c.miny && y < c.maxy && z > c.minz && z < c.maxz) return true;
     }
@@ -138,9 +144,7 @@ function score(dist: number, maxd: number, align: number, sticky: boolean): numb
 
 export function worldWarning(state: WorldState): string | null {
   const rube = state.rube;
-  if (rube && rube.rope.tension_n > rube.rope.rated_tension_n * 0.9) {
-    return "MC-01 transfer rope is above 90% rated tension.";
-  }
+  if (rube && rube.rope.tension_n > rube.rope.rated_tension_n * 0.9) return "MC-01 transfer rope is above 90% rated tension.";
   const chain = rube?.chain;
   if (chain) {
     const transfer = chain.network.cables.find((c) => c.id === "transfer_rope");
@@ -150,9 +154,7 @@ export function worldWarning(state: WorldState): string | null {
   }
   if (state.freight.brake_temperature_k > 420) return "Brake is cooking. Heat is friction.";
   if (state.gate.wedged) return "G-07 is wedged. The leaf will not take a clean command.";
-  if (Math.abs(state.gate.seal_misalignment_m) > 0.028 && state.gate.angle_rad < 0.4) {
-    return "Frame twist is jamming the gate seal.";
-  }
+  if (Math.abs(state.gate.seal_misalignment_m) > 0.028 && state.gate.angle_rad < 0.4) return "Frame twist is jamming the gate seal.";
   const live = state.members.filter((m) => m.role === "gallery_span" && !m.cut);
   const sag = live.reduce((a, m) => Math.max(a, m.sag_m), 0);
   if (live.length < 3 && sag > 0.06) return "Gallery sag is past an occupied-route estimate.";
@@ -161,21 +163,10 @@ export function worldWarning(state: WorldState): string | null {
 }
 
 export function resolveContext(args: {
-  px: number;
-  py: number;
-  pz: number;
-  eye: number;
-  yaw: number;
-  pitch: number;
-  interactables: Interactable[];
-  colliders: Collider[];
-  state: WorldState;
-  prevActionId: string | null;
-  operateId: string | null;
-  slingA: string | null;
-  mantle: boolean;
-  grounded: boolean;
-  speed: number;
+  px: number; py: number; pz: number; eye: number; yaw: number; pitch: number;
+  interactables: Interactable[]; colliders: Collider[]; state: WorldState;
+  prevActionId: string | null; operateId: string | null; slingA: string | null;
+  mantle: boolean; grounded: boolean; speed: number;
 }): CtxFrame {
   const originY = args.py + args.eye;
   const dirX = -Math.sin(args.yaw) * Math.cos(args.pitch);
@@ -196,16 +187,11 @@ export function resolveContext(args: {
     if (dist < 0.15) continue;
     const nd = dist || 1;
     const align = (dx / nd) * dirX + (dy / nd) * dirY + (dz / nd) * dirZ;
-
     const lookMax = LOOK_RANGE[it.kind];
     if (dist <= lookMax && align > 0.42) {
       const sc = score(dist, lookMax, align, it.id === args.prevActionId);
-      if (sc > lookScore) {
-        lookScore = sc;
-        look = { id: it.id, label: it.label, dist, kind: it.kind };
-      }
+      if (sc > lookScore) { lookScore = sc; look = { id: it.id, label: it.label, dist, kind: it.kind }; }
     }
-
     const actMax = rangeFor(it);
     const sticky = args.prevActionId === it.id;
     const minAlign = sticky ? 0.18 : 0.48;
@@ -213,16 +199,11 @@ export function resolveContext(args: {
     if (dist > maxd || align < minAlign) continue;
     if (losBlocked(args.px, originY, args.pz, it.x, it.y, it.z, args.colliders, ignore)) continue;
     const sc = score(dist, maxd, align, sticky);
-    if (sc > actionScore) {
-      actionScore = sc;
-      actionHit = { it, dist, align };
-    }
+    if (sc > actionScore) { actionScore = sc; actionHit = { it, dist, align }; }
   }
 
   const choices: CtxAction[] = [];
-  const push = (a: Omit<CtxAction, "prompt">) => {
-    choices.push({ ...a, prompt: `ACTION · ${a.verb} ${a.noun}`.replace(/\s+/g, " ").trim() });
-  };
+  const push = (a: Omit<CtxAction, "prompt">) => choices.push({ ...a, prompt: `ACTION · ${a.verb} ${a.noun}`.replace(/\s+/g, " ").trim() });
 
   if (args.operateId) {
     push({ id: "exit-operate", verb: "Step off", noun: "controls", targetId: args.operateId, kind: "machine", commit: "exit-operate", dist: 0, priority: 40 });
@@ -237,25 +218,12 @@ export function resolveContext(args: {
     const s = args.state;
 
     if (it.id === "cascade_ballast" && s.rube) {
-      if (s.rube.ballast.s_m < 3.62) {
-        push({ id: "cascade:push-out", verb: "Shove", noun: "ballast outboard", targetId: it.id, kind: "machine", commit: "cascade-push-out", dist, priority: 86 });
-      }
-      if (s.rube.ballast.s_m > -3.62) {
-        push({ id: "cascade:push-in", verb: "Shove", noun: "ballast inboard", targetId: it.id, kind: "machine", commit: "cascade-push-in", dist, priority: 62 });
-      }
+      if (s.rube.ballast.s_m < 3.62) push({ id: "cascade:push-out", verb: "Shove", noun: "ballast outboard", targetId: it.id, kind: "machine", commit: "cascade-push-out", dist, priority: 86 });
+      if (s.rube.ballast.s_m > -3.62) push({ id: "cascade:push-in", verb: "Shove", noun: "ballast inboard", targetId: it.id, kind: "machine", commit: "cascade-push-in", dist, priority: 62 });
     } else if (it.id === "cascade_latch" && s.rube) {
       push({ id: "cascade:latch", verb: s.rube.lever.latch_engaged ? "Release" : "Catch", noun: "pivot latch", targetId: it.id, kind: "machine", commit: "cascade-latch", dist, priority: 84 });
     } else if (it.id === "cascade_transfer_brake" && s.rube?.chain) {
-      push({
-        id: "cascade:transfer-brake",
-        verb: s.rube.chain.transfer_brake_engaged ? "Release" : "Engage",
-        noun: "gravity carriage brake",
-        targetId: it.id,
-        kind: "machine",
-        commit: "cascade-transfer-brake",
-        dist,
-        priority: 90,
-      });
+      push({ id: "cascade:transfer-brake", verb: s.rube.chain.transfer_brake_engaged ? "Release" : "Engage", noun: "gravity carriage brake", targetId: it.id, kind: "machine", commit: "cascade-transfer-brake", dist, priority: 90 });
     } else if (it.kind === "npc" && DIALOGUE[it.id]) {
       push({ id: `talk:${it.id}`, verb: "Talk to", noun: it.label, targetId: it.id, kind: "npc", commit: "talk", dist, priority: 92 });
     }
@@ -265,6 +233,10 @@ export function resolveContext(args: {
     } else if (it.id === "gate" && args.operateId !== "gate") {
       push({ id: "operate:gate", verb: "Operate", noun: "Gate G-07", targetId: "gate", kind: "machine", commit: "operate", dist, priority: s.electrical.gate_powered ? 84 : 48 });
       if (s.gate.pressure_pa > 180000) push({ id: "vent:gate", verb: "Vent", noun: "Gate G-07", targetId: "gate", kind: "machine", commit: "vent", dist, priority: 70 });
+    } else if (it.id === "mc05_station" && args.operateId !== "mc05_station") {
+      push({ id: "operate:mc05", verb: "Operate", noun: "Bascule Exchange", targetId: "mc05_station", kind: "machine", commit: "operate", dist, priority: s.electrical.voltage_process > 0 ? 90 : 52 });
+    } else if (it.id === "mc06_station" && args.operateId !== "mc06_station") {
+      push({ id: "operate:mc06", verb: "Operate", noun: "Momentum Rotunda", targetId: "mc06_station", kind: "machine", commit: "operate", dist, priority: s.electrical.voltage_process > 0 ? 90 : 52 });
     } else if (it.id === "frame" || it.id === "neck_brace") {
       if (!s.frame.brace_connected && !s.members.find((m) => m.id === "neck_brace")?.braced) push({ id: "brace:neck", verb: "Brace", noun: "transfer neck", targetId: "neck_brace", kind: "member", commit: "brace", dist, priority: 74 });
       if (!s.members.find((m) => m.id === "neck_brace")?.jacked) push({ id: "jack:neck", verb: "Jack", noun: "transfer neck", targetId: "neck_brace", kind: "member", commit: "jack", dist, priority: 68 });
@@ -303,11 +275,8 @@ export function resolveContext(args: {
     push({ id: `inspect:${look.id}`, verb: "Inspect", noun: look.label, targetId: look.id, kind: look.kind, commit: "inspect", dist: look.dist, priority: 22 });
   }
 
-  if (args.mantle) {
-    push({ id: "mantle", verb: "Mantle", noun: "ledge", targetId: "locomotion", kind: "world", commit: "mantle", dist: 0, priority: 64 });
-  } else if (args.grounded && args.speed > 0.55 && !args.operateId) {
-    push({ id: "jump", verb: "Jump", noun: "", targetId: "locomotion", kind: "world", commit: "jump", dist: 0, priority: 18 });
-  }
+  if (args.mantle) push({ id: "mantle", verb: "Mantle", noun: "ledge", targetId: "locomotion", kind: "world", commit: "mantle", dist: 0, priority: 64 });
+  else if (args.grounded && args.speed > 0.55 && !args.operateId) push({ id: "jump", verb: "Jump", noun: "", targetId: "locomotion", kind: "world", commit: "jump", dist: 0, priority: 18 });
 
   choices.sort((a, b) => b.priority - a.priority);
   const unique: CtxAction[] = [];
@@ -317,10 +286,8 @@ export function resolveContext(args: {
     seen.add(c.commit + c.targetId);
     unique.push(c);
   }
-
   const primary = unique.find((c) => c.commit !== "inspect" && c.commit !== "jump" && c.commit !== "exit-operate") ?? unique.find((c) => c.commit === "inspect") ?? unique[0] ?? null;
   const secondary = unique.find((c) => c !== primary && (c.commit === "inspect" || c.commit === "mantle" || c.commit === "jump" || c.commit === "exit-operate")) ?? unique.find((c) => c !== primary) ?? null;
-
   return {
     look,
     action: actionHit ? { id: actionHit.it.id, label: actionHit.it.label, dist: actionHit.dist, kind: actionHit.it.kind } : null,
@@ -332,52 +299,29 @@ export function resolveContext(args: {
 }
 
 export type CommitBag = {
-  sim: Simulation;
-  audio: GameAudio;
-  inspect: (id: string) => void;
-  flash: (msg: string) => void;
-  startWork: (id: string, kind: "cut" | "brace") => void;
-  enterOperate: (id: string) => void;
-  exitOperate: () => void;
-  startTalk: (npcId: string) => void;
-  setSlingA: (id: string | null) => void;
-  slingA: string | null;
-  persist: () => void;
-  jump: () => void;
-  mantle: () => void;
+  sim: Simulation; audio: GameAudio; inspect: (id: string) => void; flash: (msg: string) => void;
+  startWork: (id: string, kind: "cut" | "brace") => void; enterOperate: (id: string) => void; exitOperate: () => void;
+  startTalk: (npcId: string) => void; setSlingA: (id: string | null) => void; slingA: string | null;
+  persist: () => void; jump: () => void; mantle: () => void;
 };
 
 export function commitAction(action: CtxAction, bag: CommitBag): void {
   const s = bag.sim.state();
   switch (action.commit) {
-    case "talk":
-      if (DIALOGUE[action.targetId]) bag.startTalk(action.targetId);
-      return;
-    case "inspect":
-      bag.inspect(action.targetId);
-      bag.audio.beep(520, 0.06, 0.06);
-      return;
+    case "talk": if (DIALOGUE[action.targetId]) bag.startTalk(action.targetId); return;
+    case "inspect": bag.inspect(action.targetId); bag.audio.beep(520, 0.06, 0.06); return;
     case "operate":
       if (action.targetId === "pendant" && !s.electrical.carrier_powered) { bag.flash("Pendant is dead. Carrier has no island."); return; }
       if (action.targetId === "gate" && !s.electrical.gate_powered) { bag.flash("Gate motor feed is open. The leaf will not take torque."); return; }
-      bag.enterOperate(action.targetId);
-      bag.audio.clank();
-      return;
+      if ((action.targetId === "mc05_station" || action.targetId === "mc06_station") && s.electrical.voltage_process <= 0) { bag.flash("Process bus is dead. Mechanical brakes still work; powered travel does not."); return; }
+      bag.enterOperate(action.targetId); bag.audio.clank(); return;
     case "exit-operate": bag.exitOperate(); return;
-    case "toggle": {
-      const id = action.targetId === "board" ? "brk_shop" : action.targetId;
-      bag.flash(bag.sim.act({ type: "toggle_breaker", id }));
-      bag.audio.beep(180, 0.1, 0.1);
-      return;
-    }
+    case "toggle": { const id = action.targetId === "board" ? "brk_shop" : action.targetId; bag.flash(bag.sim.act({ type: "toggle_breaker", id })); bag.audio.beep(180, 0.1, 0.1); return; }
     case "bench":
       if (!s.electrical.shop_powered) { bag.flash("Bench is dead. Shop is not an island yet."); return; }
       bag.sim.act({ type: "mark_save_used" }); bag.persist(); bag.flash("Authority snapshot written. The building will not heal."); bag.audio.beep(440, 0.12, 0.1); return;
     case "sling": bag.setSlingA(action.targetId); bag.flash(`Sling first attachment: ${action.noun}. Need a compatible second.`); return;
-    case "sling2": {
-      const msg = bag.sim.act({ type: "sling", a: bag.slingA ?? action.targetId, b: action.targetId });
-      bag.setSlingA(null); bag.flash(msg); bag.audio.clank(); return;
-    }
+    case "sling2": { const msg = bag.sim.act({ type: "sling", a: bag.slingA ?? action.targetId, b: action.targetId }); bag.setSlingA(null); bag.flash(msg); bag.audio.clank(); return; }
     case "cut": bag.startWork(action.targetId, "cut"); return;
     case "brace": bag.startWork(action.targetId, "brace"); return;
     case "jack": bag.flash(bag.sim.act({ type: "jack_member", id: action.targetId, on: true })); bag.audio.clank(); return;
@@ -396,6 +340,4 @@ export function commitAction(action: CtxAction, bag: CommitBag): void {
   }
 }
 
-export function inspectOrNull(state: WorldState, id: string) {
-  return inspectTarget(state, id);
-}
+export function inspectOrNull(state: WorldState, id: string) { return inspectTarget(state, id); }
