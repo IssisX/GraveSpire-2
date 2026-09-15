@@ -27,6 +27,18 @@ export type Bindings = {
   bayLights: THREE.PointLight[];
   steam: THREE.Points;
   hookLight: THREE.PointLight;
+  sun: THREE.DirectionalLight;
+  fill: THREE.DirectionalLight;
+  wellLamp: THREE.PointLight;
+  hemi: THREE.HemisphereLight;
+  amb: THREE.AmbientLight;
+  pendant: THREE.Group;
+  pendantLamps: { power: THREE.Mesh; brake: THREE.Mesh; offset: THREE.Mesh };
+  telltales: THREE.Mesh[];
+  strainLamp: THREE.PointLight;
+  strainMesh: THREE.Mesh;
+  pulpitGlass: THREE.Mesh;
+  trolley: THREE.Mesh;
 };
 
 export type Level = {
@@ -270,12 +282,34 @@ export function buildLevel(scene: THREE.Scene): Level {
     k.box(1.5, 0.12, 0.5, 14, 5.6 - i * 0.4, 10.1 + i * 0.28, mats.diamond, { id: `stair_gal_${i}` });
   }
 
-  // pulpit
+  // pulpit — local hoist station. The hanging load is not a remote control.
   k.box(4.2, 1.2, 3.2, 4.8, 0.6, -7.6, mats.steel, { id: "pulpit" });
   k.box(4.2, 0.08, 3.2, 4.8, 1.24, -7.6, mats.diamond, { id: "pulpit_top" });
   k.box(1.6, 1.1, 0.12, 4.8, 1.85, -6.1, mats.black, { collider: false });
-  k.box(1.4, 0.7, 0.04, 4.8, 1.85, -6.04, mats.emissiveCool, { collider: false });
-  k.interact("carrier", "Carrier 07-A", 4.8, 1.6, -7.2, 2.2, "machine");
+  const pulpitGlass = k.box(1.4, 0.7, 0.04, 4.8, 1.85, -6.04, mats.emissiveCool, { collider: false });
+
+  const pendant = new THREE.Group();
+  const pBody = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.48, 0.12), mats.steelBlack);
+  const pCable = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 1.1, 6), mats.cable);
+  pCable.position.set(0, 0.78, 0);
+  const mkLamp = (emissive: number) => {
+    const m = new THREE.Mesh(
+      new THREE.SphereGeometry(0.028, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0x14181c, emissive, emissiveIntensity: 0.08, roughness: 0.4 }),
+    );
+    return m;
+  };
+  const lampPower = mkLamp(0x7ec8d4);
+  const lampBrake = mkLamp(0xc47a4a);
+  const lampOffset = mkLamp(0xc8b44a);
+  lampPower.position.set(-0.06, 0.12, 0.07);
+  lampBrake.position.set(0, 0.12, 0.07);
+  lampOffset.position.set(0.06, 0.12, 0.07);
+  pendant.add(pBody, pCable, lampPower, lampBrake, lampOffset);
+  pendant.position.set(4.52, 1.72, -6.42);
+  scene.add(pendant);
+  k.interact("pendant", "Carrier pendant", 4.52, 1.72, -6.42, 2.0, "machine");
+  k.interact("carrier", "Carrier 07-A", 20, 6, 0, 2.8, "machine");
 
   // gantry
   const gantry = new THREE.Group();
@@ -289,8 +323,20 @@ export function buildLevel(scene: THREE.Scene): Level {
   gantry.add(gTruckL, gTruckR);
   gantry.position.set(22, 11.1, 0);
   scene.add(gantry);
+  const trolley = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.42, 2.2), mats.steelDark);
+  trolley.position.set(-2, -0.55, 0);
+  gantry.add(trolley);
   k.ibeam(38, 21, 11.18, 1.7, "x", mats.steel);
   k.ibeam(38, 21, 11.18, -1.7, "x", mats.steel);
+
+  // hoist height scale — world-readable, not a HUD number
+  for (let m = 1; m <= 10; m++) {
+    const mark = m % 5 === 0;
+    k.box(0.08, mark ? 0.06 : 0.035, mark ? 0.42 : 0.22, 32.35, m, -3.38, mark ? mats.hazard : mats.steel, {
+      collider: false,
+      cast: false,
+    });
+  }
 
   // carrier
   const carrier = new THREE.Group();
@@ -389,6 +435,17 @@ export function buildLevel(scene: THREE.Scene): Level {
   frame.add(fWeb);
   frame.position.set(52, 4.6, 0);
   scene.add(frame);
+  const telltales: THREE.Mesh[] = [];
+  for (let i = 0; i < 3; i++) {
+    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.03, 1.35, 6), mats.hazard);
+    rod.position.set(-4 + i * 4, -0.95, 0.55);
+    frame.add(rod);
+    telltales.push(rod);
+  }
+  const strainMesh = k.box(0.22, 0.22, 0.22, 48.6, 3.4, 0.9, mats.emissiveWarn, { collider: false, cast: false });
+  const strainLamp = new THREE.PointLight(0xc47a4a, 0.4, 10, 1.4);
+  strainLamp.position.set(48.6, 3.4, 0.9);
+  scene.add(strainLamp);
 
   // neck architecture
   k.box(22, 0.5, 20, 53, -0.25, 0, mats.concrete, { id: "neck_floor" });
@@ -563,6 +620,18 @@ export function buildLevel(scene: THREE.Scene): Level {
     bayLights,
     steam,
     hookLight,
+    sun,
+    fill,
+    wellLamp,
+    hemi,
+    amb,
+    pendant,
+    pendantLamps: { power: lampPower, brake: lampBrake, offset: lampOffset },
+    telltales,
+    strainLamp,
+    strainMesh,
+    pulpitGlass,
+    trolley,
   };
 
   return {

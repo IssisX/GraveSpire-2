@@ -27,6 +27,10 @@ export class GameAudio {
     if (this.ctx.state === "suspended") void this.ctx.resume();
   };
 
+  resume() {
+    this.unlock();
+  }
+
   private startBeds() {
     if (!this.ctx || !this.amb) return;
     const drone = this.ctx.createOscillator();
@@ -107,6 +111,11 @@ export class GameAudio {
     src.start();
   }
 
+  footstep(sprint: boolean) {
+    const f = 78 + Math.random() * 28 + (sprint ? 18 : 0);
+    this.beep(f, 0.045, sprint ? 0.07 : 0.048);
+  }
+
   foot(dt: number, speed: number, grounded: boolean) {
     if (!grounded || speed < 0.8) {
       this.footT = 0;
@@ -115,11 +124,13 @@ export class GameAudio {
     this.footT += dt * speed;
     if (this.footT > 1.05) {
       this.footT = 0;
-      this.beep(90 + Math.random() * 30, 0.04, 0.05);
+      this.footstep(speed > 3.6);
     }
   }
 
-  resume() {
+  setMaster(vol: number) {
+    if (!this.master) return;
+    this.master.gain.value = Math.max(0, Math.min(1, vol));
     if (this.ctx?.state === "suspended") void this.ctx.resume();
   }
 

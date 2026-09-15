@@ -25,6 +25,22 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
         ],
         warning: f.brake_temperature_k > 420 ? "Brake is cooking. Frictional work is heat." : undefined,
       };
+    case "pendant":
+      return {
+        id,
+        title: "Carrier pendant — pulpit",
+        district: "FS07",
+        lines: [
+          { label: "Island", value: state.electrical.carrier_powered ? "live" : "dead", unit: "", source: "measured", confidence: 0.99 },
+          { label: "Height", value: n(f.height_m, 2), unit: "m", source: "measured", confidence: 0.97 },
+          { label: "Traverse", value: n(f.lateral_m, 2), unit: "m", source: "measured", confidence: 0.97 },
+          { label: "Brake", value: f.brake_engaged ? "holding" : "released", unit: "", source: "measured", confidence: 0.99 },
+          { label: "Offset from dock", value: n(Math.abs(f.lateral_m - 16), 2), unit: "m", source: "estimated", confidence: 0.8 },
+        ],
+        warning: state.electrical.carrier_powered
+          ? "Local command only. Looking at the hanging load from the west deck does not move it."
+          : "Pendant is dead. Carrier has no island.",
+      };
     case "cable":
       return {
         id,

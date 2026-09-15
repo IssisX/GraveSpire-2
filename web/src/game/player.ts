@@ -22,17 +22,23 @@ export class Player {
   vx = 0;
   vy = 0;
   vz = 0;
+  ax = 0;
+  az = 0;
+  forwardAccel = 0;
+  yawRate = 0;
   grounded = true;
   groundedId: string | null = null;
   crouch = false;
   eye = EYE;
   speed = 0;
   coyote = 0;
-  bob = 0;
   mantleT = 0;
   mantleTo: { x: number; y: number; z: number } | null = null;
   airTime = 0;
   fallFrom = 0;
+  landed = 0;
+  sprinting = false;
+  jumpBuffered = 0;
 
   forward(): { x: number; z: number } {
     return { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) };
@@ -41,15 +47,33 @@ export class Player {
     return { x: Math.cos(this.yaw), z: -Math.sin(this.yaw) };
   }
 
-  applyLook(dx: number, dy: number, sens = 0.0022) {
+  applyLook(dx: number, dy: number, sens = 0.0022, invertY = false) {
+    const prevYaw = this.yaw;
     this.yaw -= dx * sens;
-    this.pitch -= dy * sens;
+    this.pitch -= dy * sens * (invertY ? -1 : 1);
     const lim = Math.PI / 2 - 0.01;
     if (this.pitch > lim) this.pitch = lim;
     if (this.pitch < -lim) this.pitch = -lim;
+    this.yawRate = this.yaw - prevYaw;
+  }
+
+  requestJump() {
+    this.jumpBuffered = 0.14;
+  }
+
+  tryMantle(colliders: Collider[]) {
+    const f = this.forward();
+    const m = mantleProbe(this.x, this.y, this.z, f.x, f.z, colliders);
+    if (m) {
+      this.mantleTo = m;
+      this.mantleT = 0.32;
+      return true;
+    }
+    return false;
   }
 
   step(dt: number, actions: Actions, colliders: Collider[], platformDelta?: { x: number; y: number; z: number }) {
+    this.landed = 0;
     if (this.mantleTo && this.mantleT > 0) {
       this.mantleT -= dt;
       const u = Math.max(0, this.mantleT) / 0.32;
@@ -73,11 +97,13 @@ export class Player {
     const targetEye = this.crouch ? EYE_CROUCH : EYE;
     this.eye += (targetEye - this.eye) * Math.min(1, dt * 10);
 
-    this.applyLook(actions.lookX, actions.lookY);
+    this.applyLook(actions.lookX, actions.lookY, actions.lookSens, actions.invertY);
 
     const f = this.forward();
     const r = this.right();
-    const maxSp = this.crouch ? CROUCH : actions.sprint && this.grounded ? SPRINT : WALK;
+    const mag = Math.hypot(actions.moveX, actions.moveY);
+    this.sprinting = Boolean(!this.crouch && this.grounded && (actions.sprint || (actions.autoSprint && mag > 0.86)));
+    const maxSp = this.crouch ? CROUCH : this.sprinting ? SPRINT : WALK;
     const wishX = f.x * actions.moveY + r.x * actions.moveX;
     const wishZ = f.z * actions.moveY + r.z * actions.moveX;
     const wishLen = Math.hypot(wishX, wishZ);
@@ -86,9 +112,15 @@ export class Player {
     const accel = this.grounded ? 18 : 4.5;
     const targetVx = nx * maxSp;
     const targetVz = nz * maxSp;
+    const pvX = this.vx;
+    const pvZ = this.vz;
     this.vx += (targetVx - this.vx) * Math.min(1, accel * dt);
     this.vz += (targetVz - this.vz) * Math.min(1, accel * dt);
+    this.ax = (this.vx - pvX) / Math.max(dt, 1e-4);
+    this.az = (this.vz - pvZ) / Math.max(dt, 1e-4);
+    this.forwardAccel = this.ax * f.x + this.az * f.z;
 
+    const wasGround = this.grounded;
     if (this.grounded) {
       this.coyote = COYOTE;
       this.airTime = 0;
@@ -99,15 +131,16 @@ export class Player {
       this.vy -= GRAVITY * dt;
     }
 
-    if (actions.jumpPressed && this.coyote > 0) {
+    if (this.jumpBuffered > 0) this.jumpBuffered -= dt;
+    const wantJump = actions.jumpPressed || this.jumpBuffered > 0;
+    if (wantJump && this.coyote > 0) {
       this.vy = JUMP_V;
       this.grounded = false;
       this.coyote = 0;
-    } else if (actions.jumpPressed && !this.grounded) {
-      const m = mantleProbe(this.x, this.y, this.z, f.x, f.z, colliders);
-      if (m) {
-        this.mantleTo = m;
-        this.mantleT = 0.32;
+      this.jumpBuffered = 0;
+    } else if (wantJump && !this.grounded) {
+      if (this.tryMantle(colliders)) {
+        this.jumpBuffered = 0;
         return;
       }
     }
@@ -137,9 +170,12 @@ export class Player {
       if (res.hitHead && this.vy > 0) this.vy = 0;
     }
 
+    if (!wasGround && this.grounded) {
+      const drop = this.fallFrom - this.y;
+      this.landed = Math.max(0, Math.min(1, (drop - 0.35) / 4.2));
+    }
+
     this.speed = Math.hypot(this.vx, this.vz);
-    if (this.grounded && this.speed > 0.4) this.bob += this.speed * dt * 1.7;
-    else this.bob *= 1 - Math.min(1, dt * 6);
   }
 
   fallDamage(): "none" | "hurt" | "dead" {

@@ -69,7 +69,7 @@
   inset:0
 }
 
-.gs-hud button,.gs-hud a,.gs-overlay,.gs-inspect,.gs-wheel,.gs-touch,.gs-pause-fab,.gs-tools-rail,.gs-ops,.gs-touch-actions {
+.gs-hud button,.gs-hud a,.gs-overlay,.gs-inspect,.gs-wheel,.gs-touch,.gs-pause-fab,.gs-tools-rail,.gs-ops,.gs-touch-actions,.gs-settings,.gs-opening,.gs-selector,.gs-splash {
   pointer-events:auto
 }
 
@@ -796,6 +796,10 @@
   display:none
 }
 
+.is-touch .gs-obj-one {
+  display:grid
+}
+
 .is-touch .gs-chip {
   max-width:calc(100% - 100px)
 }
@@ -896,6 +900,10 @@
 
   .gs-obj {
     display:none
+  }
+
+  .gs-obj-one {
+    display:grid
   }
 
   .gs-wordmark {
@@ -1145,6 +1153,361 @@
 .gal-light-nav.is-next {
   right: max(8px, env(safe-area-inset-right));
   top: 42%;
+}
+
+/* —— vertical slice: sparse HUD, opening, settings, operate mode —— */
+.gs-splash {
+  appearance: none;
+  border: 0;
+  inset: 0;
+  position: absolute;
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  width: 100%;
+  padding: 24px;
+}
+
+.gs-splash-sub {
+  font-family: var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-size: 11px;
+  margin: 0;
+}
+
+.gs-opening {
+  appearance: none;
+  border: 0;
+  inset: 0;
+  position: absolute;
+  z-index: 7;
+  display: grid;
+  place-items: end stretch;
+  background: linear-gradient(to top, color-mix(in oklab, var(--color-bg) 78%, transparent), transparent 55%);
+  color: inherit;
+  padding: max(16px, env(safe-area-inset-bottom)) 16px 28px;
+  text-align: left;
+}
+
+.gs-opening-inner {
+  width: min(520px, 100%);
+  margin: 0 auto;
+}
+
+.gs-opening h2 {
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+  font-size: clamp(1.6rem, 5vw, 2.4rem);
+  font-weight: 600;
+  margin: 0;
+}
+
+.gs-opening p {
+  color: var(--color-muted);
+  line-height: 1.5;
+  margin: 8px 0 0;
+  font-size: 14px;
+}
+
+.gs-opening-pips {
+  display: flex;
+  gap: 6px;
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+}
+
+.gs-opening-pips li {
+  width: 18px;
+  height: 3px;
+  background: var(--color-line);
+}
+
+.gs-opening-pips li.is-on,
+.gs-opening-pips li.is-done {
+  background: var(--color-accent);
+}
+
+.gs-opening-skip {
+  display: block;
+  margin-top: 12px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-subtle);
+  font-size: 10px;
+}
+
+.gs-warn-banner {
+  position: absolute;
+  top: max(88px, calc(env(safe-area-inset-top) + 72px));
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(420px, 92vw);
+  padding: 8px 12px;
+  border: 1px solid color-mix(in oklab, var(--color-warn) 55%, var(--color-line));
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--color-bg) 82%, transparent);
+  color: var(--color-warn);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.gs-hint {
+  position: absolute;
+  bottom: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(420px, 90vw);
+  color: var(--color-muted);
+  font-size: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.gs-machine {
+  position: absolute;
+  left: 16px;
+  bottom: 72px;
+  width: min(280px, 78vw);
+  padding: 12px 14px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--color-bg) 82%, transparent);
+}
+
+.gs-machine dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0 0;
+}
+
+.gs-machine dt {
+  font-family: var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.gs-machine dd {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  margin: 2px 0 0;
+  font-size: 13px;
+}
+
+.gs-machine-hint {
+  color: var(--color-subtle);
+  margin: 8px 0 0;
+  font-size: 11px;
+}
+
+.gs-selector {
+  position: absolute;
+  left: 50%;
+  bottom: max(96px, calc(env(safe-area-inset-bottom) + 88px));
+  transform: translateX(-50%);
+  display: grid;
+  gap: 6px;
+  width: min(320px, 90vw);
+  z-index: 6;
+}
+
+.gs-selector button {
+  background: var(--color-surface);
+  color: var(--color-fg);
+  border: 1px solid var(--color-line);
+  border-radius: 12px;
+  min-height: 44px;
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+  font-size: 18px;
+}
+
+.gs-selector button.is-on {
+  border-color: var(--color-accent);
+  background: var(--color-elevated);
+}
+
+.gs-settings {
+  width: min(440px, 100%);
+  max-height: min(86dvh, 720px);
+  overflow: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  border-radius: 22px;
+  padding: 20px 18px 18px;
+  position: relative;
+  z-index: 10;
+}
+
+.gs-overlay .gs-settings {
+  margin: auto;
+}
+
+.gs-settings-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  margin-bottom: 12px;
+}
+
+.gs-settings-head h2 {
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 600;
+}
+
+.gs-settings section {
+  border-top: 1px solid var(--color-line);
+  padding: 12px 0;
+}
+
+.gs-settings h3 {
+  font-family: var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 500;
+  margin: 0 0 10px;
+}
+
+.gs-set-row {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: var(--color-fg);
+  font-size: 14px;
+}
+
+.gs-set-row span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gs-set-row em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.gs-set-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--color-accent);
+}
+
+.gs-toggle {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  padding: 0;
+}
+
+.gs-toggle i {
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid var(--color-line);
+  background: var(--color-elevated);
+  position: relative;
+}
+
+.gs-toggle i:after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--color-muted);
+  position: absolute;
+  top: 2px;
+  left: 2px;
+}
+
+.gs-toggle.is-on i {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.gs-toggle.is-on i:after {
+  background: var(--color-bg);
+  left: 18px;
+}
+
+.gs-seg {
+  display: flex;
+  gap: 6px;
+}
+
+.gs-seg button {
+  flex: 1;
+  min-height: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--color-line);
+  background: var(--color-elevated);
+  color: var(--color-fg);
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+  font-size: 16px;
+}
+
+.gs-seg button.is-on {
+  background: var(--color-accent);
+  color: var(--color-bg);
+  border-color: var(--color-accent);
+}
+
+.gs-sec {
+  min-width: 72px !important;
+}
+
+.gs-use.is-dim {
+  opacity: 0.55;
+}
+
+.is-touch .gs-machine {
+  left: 12px;
+  right: 12px;
+  width: auto;
+  bottom: max(168px, calc(env(safe-area-inset-bottom) + 150px));
+}
+
+.is-touch .gs-hint {
+  bottom: max(148px, calc(env(safe-area-inset-bottom) + 130px));
+}
+
+.is-touch .gs-settings {
+  width: min(440px, 100%);
+  max-height: calc(100dvh - 16px);
+  margin: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  padding: 16px 14px;
+}
+
+.gs-bottom.is-touch {
+  top: max(64px, calc(env(safe-area-inset-top) + 52px));
+}
+
+@media (pointer: coarse) and (width >= 700px) {
+  .is-touch .gs-obj-one {
+    display: grid;
+  }
 }
 
 @media (min-width: 700px) {

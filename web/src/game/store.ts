@@ -1,29 +1,11 @@
 import { create } from "zustand";
 import type { InspectReading, ObjectiveStatus, SimEvent } from "@/sim/types.ts";
 import { MODEL_CLASS } from "@/sim/types.ts";
+import type { CtxAction, LookInfo } from "./context.ts";
+import type { OpeningBeat } from "./opening.ts";
+import type { OperateKind } from "./operate.ts";
 
-export type Tool =
-  | "inspect"
-  | "operate"
-  | "isolate"
-  | "sling"
-  | "brace"
-  | "jack"
-  | "cut"
-  | "talk";
-
-export const TOOLS: { id: Tool; label: string; hint: string }[] = [
-  { id: "inspect", label: "Inspect", hint: "Readings with units and provenance" },
-  { id: "operate", label: "Operate", hint: "Raise / lower / drive / brake / open" },
-  { id: "isolate", label: "Isolate", hint: "Breakers, valves, process feed" },
-  { id: "sling", label: "Sling", hint: "Two attachments, then commit" },
-  { id: "brace", label: "Brace", hint: "Install a real constraint" },
-  { id: "jack", label: "Jack", hint: "Take load, do not delete it" },
-  { id: "cut", label: "Cut", hint: "Slow. Declared members only" },
-  { id: "talk", label: "Talk", hint: "They do not orbit you" },
-];
-
-export type Phase = "title" | "playing" | "paused" | "dialogue" | "ending" | "dead";
+export type Phase = "title" | "opening" | "playing" | "paused" | "dialogue" | "ending" | "dead";
 
 export interface DialogueView {
   npcId: string;
@@ -31,13 +13,6 @@ export interface DialogueView {
   role: string;
   text: string;
   options: { id: string; label: string }[];
-}
-
-export interface LookTarget {
-  id: string;
-  label: string;
-  dist: number;
-  kind: "machine" | "member" | "npc" | "board" | "bench" | "world";
 }
 
 export interface HudSnap {
@@ -56,13 +31,18 @@ export interface HudSnap {
   districtShort: string;
   carrierPower: boolean;
   gateOpen: boolean;
+  height_m: number;
+  lateral_m: number;
 }
 
 export interface GameUI {
   phase: Phase;
-  tool: Tool;
-  toolWheel: boolean;
-  look: LookTarget | null;
+  look: LookInfo | null;
+  action: LookInfo | null;
+  primary: CtxAction | null;
+  secondary: CtxAction | null;
+  choices: CtxAction[];
+  selectorOpen: boolean;
   inspect: InspectReading | null;
   inspectOpen: boolean;
   objectives: ObjectiveStatus[];
@@ -73,18 +53,28 @@ export interface GameUI {
   snap: HudSnap | null;
   slingA: string | null;
   operateId: string | null;
+  operateKind: OperateKind | null;
   message: string | null;
+  warning: string | null;
   touch: boolean;
   ready: boolean;
   ending: { title: string; body: string; freight: string; power: string; people: string } | null;
   modelClass: string;
+  settingsOpen: boolean;
+  opening: OpeningBeat | null;
+  openingIndex: number;
+  hint: string | null;
+  hasSave: boolean;
 }
 
 const empty: GameUI = {
   phase: "title",
-  tool: "inspect",
-  toolWheel: false,
   look: null,
+  action: null,
+  primary: null,
+  secondary: null,
+  choices: [],
+  selectorOpen: false,
   inspect: null,
   inspectOpen: false,
   objectives: [],
@@ -95,11 +85,18 @@ const empty: GameUI = {
   snap: null,
   slingA: null,
   operateId: null,
+  operateKind: null,
   message: null,
+  warning: null,
   touch: false,
   ready: false,
   ending: null,
   modelClass: MODEL_CLASS,
+  settingsOpen: false,
+  opening: null,
+  openingIndex: 0,
+  hint: null,
+  hasSave: false,
 };
 
 export const useGame = create<

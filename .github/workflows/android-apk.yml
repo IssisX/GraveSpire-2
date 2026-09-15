@@ -86,7 +86,8 @@ jobs:
 
             1. Tap the APK below.
             2. Allow install from GitHub if Android asks.
-            3. Left thumb walks, right thumb looks, Use on what you face.
+            3. Left thumb walks. Right side looks. One Action on what you can reach.
+            4. Machines expose Raise/Lower/Brake only while you stand at the pendant.
 
             This is Act I as a WebView around the TypeScript/Three.js bay — not the Godot/C++ cell on main, not Unreal, not GDD §16 completeness.
           prerelease: true
