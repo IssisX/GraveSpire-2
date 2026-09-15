@@ -2,16 +2,16 @@ import { G, clamp, type LinkedCascadeState, type MechanicalDofState } from "./ty
 import { addGeneralizedForce, mechDof, type GeneralizedForces } from "./mechanical-network.ts";
 import { MECH_ID } from "./mechanical-ids.ts";
 import { UPPER } from "./upper-cascade.ts";
+import {
+  applyPressureCrownForces,
+  enforcePressureCrownConstraints,
+  ensurePressureCrownState,
+  pressureCrownFinite,
+} from "./pressure-crown.ts";
 
-/**
- * MC-07/08 are not separate solvers. They contribute DOFs and force elements to
- * the same MechanicalNetworkState already carrying MC-01..06. The geometry is
- * deliberately vertical: the machine stack itself is the skyscraper.
- */
+/** MC-07/08 remain force contributors to the same shared network. */
 export const VERTICAL = {
   z: -36.0,
-
-  // MC-07 — counterbalanced throat / stacked freight lift.
   mc07X: 174.0,
   shaftBaseY: 23.0,
   shaftTravelM: 24.0,
@@ -30,14 +30,12 @@ export const VERTICAL = {
   cradlePivotY: 47.2,
   cradleLengthM: 11.5,
   cradleMassKg: 42000.0,
-  cradleCounterMassKg: 34000.0,
+  cradleCounterMassKg: 45000.0,
   cradleCounterArmM: 5.5,
   cradleMinRad: -0.12,
   cradleMaxRad: 0.72,
   cradleContactQ: 21.8,
   cradleArmM: 1.15,
-
-  // MC-08 — torsion stack / helical transfer stage.
   mc08PivotX: 190.0,
   mc08PivotY: 50.8,
   ringRadiusM: 8.5,
@@ -69,39 +67,9 @@ function addDof(chain: LinkedCascadeState, d: MechanicalDofState): void {
 }
 
 export function ensureVerticalSpineState(chain: LinkedCascadeState): void {
-  addDof(chain, {
-    id: MECH_ID.mc07BrakeHandle,
-    kind: "linear",
-    q: 0,
-    v: 0,
-    inertia_si: 38,
-    damping_si: 260,
-    min_q: 0,
-    max_q: 1,
-    stop_restitution: 0.02,
-  });
-  addDof(chain, {
-    id: MECH_ID.mc07Ascender,
-    kind: "linear",
-    q: 0,
-    v: 0,
-    inertia_si: VERTICAL.ascenderMassKg,
-    damping_si: 2200,
-    min_q: 0,
-    max_q: VERTICAL.shaftTravelM,
-    stop_restitution: 0.025,
-  });
-  addDof(chain, {
-    id: MECH_ID.mc07Countercar,
-    kind: "linear",
-    q: VERTICAL.shaftTravelM,
-    v: 0,
-    inertia_si: VERTICAL.countercarMassKg,
-    damping_si: 2600,
-    min_q: 0,
-    max_q: VERTICAL.shaftTravelM,
-    stop_restitution: 0.025,
-  });
+  addDof(chain, { id: MECH_ID.mc07BrakeHandle, kind: "linear", q: 0, v: 0, inertia_si: 38, damping_si: 260, min_q: 0, max_q: 1, stop_restitution: 0.02 });
+  addDof(chain, { id: MECH_ID.mc07Ascender, kind: "linear", q: 0, v: 0, inertia_si: VERTICAL.ascenderMassKg, damping_si: 2200, min_q: 0, max_q: VERTICAL.shaftTravelM, stop_restitution: 0.025 });
+  addDof(chain, { id: MECH_ID.mc07Countercar, kind: "linear", q: VERTICAL.shaftTravelM, v: 0, inertia_si: VERTICAL.countercarMassKg, damping_si: 2600, min_q: 0, max_q: VERTICAL.shaftTravelM, stop_restitution: 0.025 });
   addDof(chain, {
     id: MECH_ID.mc07Cradle,
     kind: "rotary",
@@ -115,51 +83,10 @@ export function ensureVerticalSpineState(chain: LinkedCascadeState): void {
     max_q: VERTICAL.cradleMaxRad,
     stop_restitution: 0.02,
   });
-
-  addDof(chain, {
-    id: MECH_ID.mc08Latch,
-    kind: "linear",
-    q: 0,
-    v: 0,
-    inertia_si: 60,
-    damping_si: 420,
-    min_q: 0,
-    max_q: VERTICAL.latchMaxM,
-    stop_restitution: 0,
-  });
-  addDof(chain, {
-    id: MECH_ID.mc08Ring,
-    kind: "rotary",
-    q: 0,
-    v: 0,
-    inertia_si: VERTICAL.ringBaseInertiaKgm2 + VERTICAL.ballastMassKg * VERTICAL.ballastStartM ** 2,
-    damping_si: VERTICAL.ringDampingNms,
-    min_q: 0,
-    max_q: VERTICAL.ringMaxRad,
-    stop_restitution: 0.03,
-  });
-  addDof(chain, {
-    id: MECH_ID.mc08Ballast,
-    kind: "linear",
-    q: VERTICAL.ballastStartM,
-    v: 0,
-    inertia_si: VERTICAL.ballastMassKg,
-    damping_si: VERTICAL.ballastDampingNsPm,
-    min_q: VERTICAL.ballastMinM,
-    max_q: VERTICAL.ballastMaxM,
-    stop_restitution: 0.05,
-  });
-  addDof(chain, {
-    id: MECH_ID.mc08Helix,
-    kind: "linear",
-    q: 0,
-    v: 0,
-    inertia_si: VERTICAL.helixMassKg,
-    damping_si: 1.8e4,
-    min_q: 0,
-    max_q: VERTICAL.helixTravelM,
-    stop_restitution: 0.03,
-  });
+  addDof(chain, { id: MECH_ID.mc08Latch, kind: "linear", q: 0, v: 0, inertia_si: 60, damping_si: 420, min_q: 0, max_q: VERTICAL.latchMaxM, stop_restitution: 0 });
+  addDof(chain, { id: MECH_ID.mc08Ring, kind: "rotary", q: 0, v: 0, inertia_si: VERTICAL.ringBaseInertiaKgm2 + VERTICAL.ballastMassKg * VERTICAL.ballastStartM ** 2, damping_si: VERTICAL.ringDampingNms, min_q: 0, max_q: VERTICAL.ringMaxRad, stop_restitution: 0.03 });
+  addDof(chain, { id: MECH_ID.mc08Ballast, kind: "linear", q: VERTICAL.ballastStartM, v: 0, inertia_si: VERTICAL.ballastMassKg, damping_si: VERTICAL.ballastDampingNsPm, min_q: VERTICAL.ballastMinM, max_q: VERTICAL.ballastMaxM, stop_restitution: 0.05 });
+  addDof(chain, { id: MECH_ID.mc08Helix, kind: "linear", q: 0, v: 0, inertia_si: VERTICAL.helixMassKg, damping_si: 1.8e4, min_q: 0, max_q: VERTICAL.helixTravelM, stop_restitution: 0.03 });
 
   if (!chain.network.cables.some((c) => c.id === MECH_ID.mc07BalanceCable)) {
     const initialLength = 60 - VERTICAL.shaftTravelM;
@@ -179,13 +106,13 @@ export function ensureVerticalSpineState(chain: LinkedCascadeState): void {
       ],
     });
   }
+  ensurePressureCrownState(chain);
 }
 
 function finiteBrakeFraction(chain: LinkedCascadeState): number {
   return 1 - clamp(mechDof(chain.network, MECH_ID.mc07BrakeHandle).q, 0, 1);
 }
 
-/** Force assembly only. Integration still occurs once in stepMechanicalNetwork. */
 export function applyVerticalSpineForces(chain: LinkedCascadeState, forces: GeneralizedForces): void {
   ensureVerticalSpineState(chain);
   const net = chain.network;
@@ -200,8 +127,6 @@ export function applyVerticalSpineForces(chain: LinkedCascadeState, forces: Gene
   const ballast = mechDof(net, MECH_ID.mc08Ballast);
   const helix = mechDof(net, MECH_ID.mc08Helix);
 
-  // MC-06 -> MC-07: the radial bridge itself depresses the release bar at the
-  // upper exit. Reaction feeds back into rotor/extension; no completion flag.
   const radius = UPPER.radialBaseRadiusM + radial.q;
   const tipX = UPPER.mc06PivotX + radius * Math.cos(rotor.q);
   const tipY = UPPER.mc06PivotY + radius * Math.sin(rotor.q);
@@ -215,16 +140,11 @@ export function applyVerticalSpineForces(chain: LinkedCascadeState, forces: Gene
     addGeneralizedForce(forces, MECH_ID.mc06Rotor, -reaction * radius * Math.cos(rotor.q));
     addGeneralizedForce(forces, MECH_ID.mc06Bridge, -reaction * Math.sin(rotor.q));
   }
-
-  // Detent keeps the release handle at either HOLD or RELEASE.
   const detentTarget = brake.q < 0.5 ? 0 : 1;
   addGeneralizedForce(forces, MECH_ID.mc07BrakeHandle, -5200 * (brake.q - detentTarget));
 
-  // MC-07: paired cars share one routed cable. Gravity difference is the motor.
   addGeneralizedForce(forces, MECH_ID.mc07Ascender, -VERTICAL.ascenderMassKg * G);
   addGeneralizedForce(forces, MECH_ID.mc07Countercar, -VERTICAL.countercarMassKg * G);
-
-  // Finite sheave brake resists the actual imbalance in BOTH cable directions.
   const brakeScale = finiteBrakeFraction(chain);
   if (brakeScale > 0.01) {
     const staticImbalanceN = 0.5 * (VERTICAL.countercarMassKg - VERTICAL.ascenderMassKg) * G;
@@ -234,7 +154,6 @@ export function applyVerticalSpineForces(chain: LinkedCascadeState, forces: Gene
     addGeneralizedForce(forces, MECH_ID.mc07Countercar, -ascBrake);
   }
 
-  // Arriving ascender physically rotates the giant loading cradle at the top.
   const cradleBoundary = VERTICAL.cradleContactQ + VERTICAL.cradleArmM * Math.sin(cradle.q);
   const cradlePen = Math.max(0, asc.q - cradleBoundary);
   if (cradlePen > 0) {
@@ -248,37 +167,27 @@ export function applyVerticalSpineForces(chain: LinkedCascadeState, forces: Gene
   const counterbalanceGravity = VERTICAL.cradleCounterMassKg * G * VERTICAL.cradleCounterArmM * Math.cos(cradle.q);
   addGeneralizedForce(forces, MECH_ID.mc07Cradle, cradleGravity + counterbalanceGravity);
 
-  // MC-07 -> MC-08: cradle rotation pulls the torsion-stage latch clear.
-  const latchTarget = clamp(
-    (cradle.q - VERTICAL.latchReleaseAngleRad) * VERTICAL.latchGainMPerRad,
-    0,
-    VERTICAL.latchMaxM,
-  );
+  const latchTarget = clamp((cradle.q - VERTICAL.latchReleaseAngleRad) * VERTICAL.latchGainMPerRad, 0, VERTICAL.latchMaxM);
   const latchTargetV = cradle.q > VERTICAL.latchReleaseAngleRad ? cradle.v * VERTICAL.latchGainMPerRad : 0;
   const latchForce = VERTICAL.latchK * (latchTarget - latch.q) + VERTICAL.latchC * (latchTargetV - latch.v);
   addGeneralizedForce(forces, MECH_ID.mc08Latch, latchForce);
   if (latchForce > 0) addGeneralizedForce(forces, MECH_ID.mc07Cradle, -latchForce * VERTICAL.latchGainMPerRad);
 
-  // MC-08: a torsion-charged annular floor drives a helical lift while an
-  // eccentric 45 t ballast changes inertia and gravitational moment in flight.
   ring.inertia_si = VERTICAL.ringBaseInertiaKgm2 + VERTICAL.ballastMassKg * ballast.q * ballast.q;
-  const torsionTorque = VERTICAL.torsionKnmPrad * (VERTICAL.torsionRestRad - ring.q);
-  const ballastGravityTorque = -VERTICAL.ballastMassKg * G * ballast.q * Math.cos(ring.q);
-  addGeneralizedForce(forces, MECH_ID.mc08Ring, torsionTorque + ballastGravityTorque);
-
-  const radialGravity = -VERTICAL.ballastMassKg * G * Math.sin(ring.q);
-  addGeneralizedForce(forces, MECH_ID.mc08Ballast, radialGravity);
+  addGeneralizedForce(forces, MECH_ID.mc08Ring,
+    VERTICAL.torsionKnmPrad * (VERTICAL.torsionRestRad - ring.q) -
+    VERTICAL.ballastMassKg * G * ballast.q * Math.cos(ring.q));
+  addGeneralizedForce(forces, MECH_ID.mc08Ballast, -VERTICAL.ballastMassKg * G * Math.sin(ring.q));
 
   const helixTarget = clamp(VERTICAL.helixPitchMPerRad * ring.q, 0, VERTICAL.helixTravelM);
   const helixTargetV = ring.q > 0 && ring.q < VERTICAL.ringMaxRad ? VERTICAL.helixPitchMPerRad * ring.v : 0;
-  const transmission =
-    VERTICAL.helixCouplingK * (helixTarget - helix.q) +
-    VERTICAL.helixCouplingC * (helixTargetV - helix.v);
+  const transmission = VERTICAL.helixCouplingK * (helixTarget - helix.q) + VERTICAL.helixCouplingC * (helixTargetV - helix.v);
   addGeneralizedForce(forces, MECH_ID.mc08Helix, transmission - VERTICAL.helixMassKg * G);
   addGeneralizedForce(forces, MECH_ID.mc08Ring, -transmission * VERTICAL.helixPitchMPerRad);
+
+  applyPressureCrownForces(chain, forces);
 }
 
-/** Post-step unilateral restraints; no alternate state is stored here. */
 export function enforceVerticalSpineConstraints(chain: LinkedCascadeState): void {
   ensureVerticalSpineState(chain);
   const latch = mechDof(chain.network, MECH_ID.mc08Latch);
@@ -287,24 +196,16 @@ export function enforceVerticalSpineConstraints(chain: LinkedCascadeState): void
     ring.q = 0;
     if (ring.v > 0) ring.v = 0;
   }
+  enforcePressureCrownConstraints(chain);
 }
 
 export function verticalSpineFinite(chain: LinkedCascadeState): boolean {
   ensureVerticalSpineState(chain);
-  const ids = [
-    MECH_ID.mc07BrakeHandle,
-    MECH_ID.mc07Ascender,
-    MECH_ID.mc07Countercar,
-    MECH_ID.mc07Cradle,
-    MECH_ID.mc08Latch,
-    MECH_ID.mc08Ring,
-    MECH_ID.mc08Ballast,
-    MECH_ID.mc08Helix,
-  ];
+  const ids = [MECH_ID.mc07BrakeHandle, MECH_ID.mc07Ascender, MECH_ID.mc07Countercar, MECH_ID.mc07Cradle, MECH_ID.mc08Latch, MECH_ID.mc08Ring, MECH_ID.mc08Ballast, MECH_ID.mc08Helix];
   return ids.every((id) => {
     const d = mechDof(chain.network, id);
     return Number.isFinite(d.q) && Number.isFinite(d.v) && Number.isFinite(d.inertia_si);
-  });
+  }) && pressureCrownFinite(chain);
 }
 
 export function mc07World(chain: LinkedCascadeState) {
