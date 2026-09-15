@@ -1,5 +1,11 @@
 import { G, clamp, type LinkedCascadeState, type MechanicalDofState } from "./types.ts";
-import { addGeneralizedForce, mechDof, type GeneralizedForces } from "./mechanical-network.ts";
+import {
+  addGeneralizedForce,
+  mechDof,
+  oneWayClutchTorque,
+  retainOverCenter,
+  type GeneralizedForces,
+} from "./mechanical-network.ts";
 import { MECH_ID } from "./mechanical-ids.ts";
 import {
   applySkySpineForces,
@@ -14,7 +20,7 @@ export const PRESSURE_CROWN = {
   ramBaseY: 69.0,
   ramTravelM: 22.0,
   ramMassKg: 80000.0,
-  pistonAreaM2: 0.16,
+  pistonAreaM2: 0.22,
   gasVolume0M3: 18.0,
   gasPressure0Pa: 7.0e6,
   ambientPressurePa: 101325.0,
@@ -22,7 +28,7 @@ export const PRESSURE_CROWN = {
   ramDampingNsPm: 1.5e4,
   valveTravelM: 0.28,
   valveClearM: 0.045,
-  valveOverCenterM: 0.030,
+  valveOverCenterM: 0.012,
   valveFollowerGain: 0.65,
   valveFollowerStartM: 14.2,
   valveK: 2.4e5,
@@ -33,9 +39,10 @@ export const PRESSURE_CROWN = {
   flywheelBaseInertiaKgm2: 1.0e7,
   flywheelDampingNms: 7.0e4,
   rackEngageM: 16.8,
-  rackRatioRadPerM: 1.85,
+  rackRatioRadPerM: 1.20,
   rackClutchNms: 3.4e6,
   rackMaxTorqueNm: 8.0e6,
+  rackEfficiency: 0.84,
   governorCount: 4,
   governorMassEachKg: 4200.0,
   governorBaseRadiusM: 3.1,
@@ -141,19 +148,33 @@ export function applyPressureCrownForces(chain: LinkedCascadeState, forces: Gene
   addGeneralizedForce(forces, MECH_ID.mc09Valve, valveForce);
   if (valveForce > 0) addGeneralizedForce(forces, MECH_ID.mc08Helix, -valveForce * PRESSURE_CROWN.valveFollowerGain);
 
+  // The spring only biases the follower. Permanent retention is handled by the
+  // generic over-center topology after actual crossing of the cam point.
   const detentTarget = valve.q >= PRESSURE_CROWN.valveOverCenterM ? PRESSURE_CROWN.valveTravelM : 0;
   addGeneralizedForce(forces, MECH_ID.mc09Valve, PRESSURE_CROWN.valveDetentK * (detentTarget - valve.q));
 
   const pressure = gasPressurePa(chain);
   const pressureForce = Math.max(0, pressure - PRESSURE_CROWN.ambientPressurePa) * PRESSURE_CROWN.pistonAreaM2;
-  addGeneralizedForce(forces, MECH_ID.mc09Ram, pressureForce - PRESSURE_CROWN.ramMassKg * G);
+  const gravityForce = PRESSURE_CROWN.ramMassKg * G;
+  addGeneralizedForce(forces, MECH_ID.mc09Ram, pressureForce - gravityForce);
 
-  // One-way clutch: upward ram rack can accelerate the rotor but cannot position-lock it.
+  // Energy-consistent one-way rack clutch. The flywheel can only receive torque
+  // the pressure ram can supply after gravity/damping, so the clutch no longer
+  // produces a numerically huge reaction that instantaneously reverses the ram.
   if (ram.q > PRESSURE_CROWN.rackEngageM && ram.v > 0) {
-    const drivenOmega = PRESSURE_CROWN.rackRatioRadPerM * ram.v;
-    const slip = drivenOmega - flywheel.v;
-    if (slip > 0) {
-      const rackTorque = Math.min(PRESSURE_CROWN.rackMaxTorqueNm, PRESSURE_CROWN.rackClutchNms * slip);
+    const availableInputForce = Math.max(
+      0,
+      (pressureForce - gravityForce - PRESSURE_CROWN.ramDampingNsPm * Math.max(0, ram.v)) * PRESSURE_CROWN.rackEfficiency,
+    );
+    const rackTorque = oneWayClutchTorque({
+      inputVelocity: ram.v,
+      outputVelocity: flywheel.v,
+      ratioOutputPerInput: PRESSURE_CROWN.rackRatioRadPerM,
+      couplingNms: PRESSURE_CROWN.rackClutchNms,
+      maxTorqueNm: PRESSURE_CROWN.rackMaxTorqueNm,
+      maxInputForceN: availableInputForce,
+    });
+    if (rackTorque > 0) {
       addGeneralizedForce(forces, MECH_ID.mc10Flywheel, rackTorque);
       addGeneralizedForce(forces, MECH_ID.mc09Ram, -rackTorque * PRESSURE_CROWN.rackRatioRadPerM);
     }
@@ -177,6 +198,7 @@ export function enforcePressureCrownConstraints(chain: LinkedCascadeState): void
   ensurePressureCrownState(chain);
   const valve = mechDof(chain.network, MECH_ID.mc09Valve);
   const ram = mechDof(chain.network, MECH_ID.mc09Ram);
+  retainOverCenter(valve, PRESSURE_CROWN.valveOverCenterM, PRESSURE_CROWN.valveClearM);
   if (valve.q < PRESSURE_CROWN.valveClearM && ram.q > 0) {
     ram.q = 0;
     if (ram.v > 0) ram.v = 0;
