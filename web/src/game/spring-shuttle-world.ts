@@ -8,6 +8,7 @@ import type { Level } from "./level.ts";
 import { makeSignTexture } from "./materials.ts";
 import { applyUpperCascadeCoupling } from "./upper-world.ts";
 import { applyVerticalSpineCoupling } from "./vertical-world.ts";
+import { applyPressureCrownCoupling } from "./pressure-crown-world.ts";
 
 type ShuttleBindings = {
   root: THREE.Group;
@@ -164,4 +165,5 @@ export function applySpringShuttleCoupling(level: Level, sim: Simulation): void 
 
   applyUpperCascadeCoupling(level, sim);
   applyVerticalSpineCoupling(level, sim);
+  applyPressureCrownCoupling(level, sim);
 }
