@@ -1,11 +1,11 @@
 import type { Actions } from "./input.ts";
 import { mantleProbe, moveCapsule, type Collider } from "./collision.ts";
 
-const WALK = 2.55;
-const SPRINT = 4.85;
-const CROUCH = 1.15;
+const WALK = 2.8;
+const SPRINT = 6.05;
+const CROUCH = 1.4;
 const GRAVITY = 9.80665;
-const JUMP_V = 3.55;
+const JUMP_V = 3.8;
 const COYOTE = 0.14;
 const EYE = 1.62;
 const EYE_CROUCH = 0.96;
@@ -26,6 +26,21 @@ const FALL_BARKS = [
   "NOTE TO SELF: GRAVITY REMAINS OPERATIONAL!",
 ] as const;
 
+function moveToward2D(
+  vx: number,
+  vz: number,
+  tx: number,
+  tz: number,
+  maxDelta: number,
+): { x: number; z: number } {
+  const dx = tx - vx;
+  const dz = tz - vz;
+  const d = Math.hypot(dx, dz);
+  if (d <= maxDelta || d < 1e-6) return { x: tx, z: tz };
+  const k = maxDelta / d;
+  return { x: vx + dx * k, z: vz + dz * k };
+}
+
 export class Player {
   x = 5.6;
   y = 0.05;
@@ -38,6 +53,9 @@ export class Player {
   ax = 0;
   az = 0;
   forwardAccel = 0;
+  lateralAccel = 0;
+  forwardSpeed = 0;
+  lateralSpeed = 0;
   yawRate = 0;
   grounded = true;
   groundedId: string | null = null;
@@ -83,7 +101,7 @@ export class Player {
     const m = mantleProbe(this.x, this.y, this.z, f.x, f.z, colliders);
     if (m) {
       this.mantleTo = m;
-      this.mantleT = 0.32;
+      this.mantleT = 0.30;
       return true;
     }
     return false;
@@ -123,11 +141,12 @@ export class Player {
     this.barkClock = Math.max(0, this.barkClock - dt);
     if (this.mantleTo && this.mantleT > 0) {
       this.mantleT -= dt;
-      const u = Math.max(0, this.mantleT) / 0.32;
+      const u = Math.max(0, this.mantleT) / 0.30;
       const t = 1 - u;
-      this.x += (this.mantleTo.x - this.x) * Math.min(1, t * 3);
-      this.y += (this.mantleTo.y - this.y) * Math.min(1, t * 3);
-      this.z += (this.mantleTo.z - this.z) * Math.min(1, t * 3);
+      const ease = t * t * (3 - 2 * t);
+      this.x += (this.mantleTo.x - this.x) * Math.min(1, ease * 0.36 + dt * 7.5);
+      this.y += (this.mantleTo.y - this.y) * Math.min(1, ease * 0.40 + dt * 7.5);
+      this.z += (this.mantleTo.z - this.z) * Math.min(1, ease * 0.36 + dt * 7.5);
       this.vy = 0;
       if (this.mantleT <= 0) {
         this.x = this.mantleTo.x;
@@ -142,30 +161,52 @@ export class Player {
     this.crouch = actions.crouch;
     const wantH = this.crouch ? CAP_H_CROUCH : CAP_H;
     const targetEye = this.crouch ? EYE_CROUCH : EYE;
-    this.eye += (targetEye - this.eye) * Math.min(1, dt * 10);
+    this.eye += (targetEye - this.eye) * (1 - Math.exp(-12 * dt));
 
     this.applyLook(actions.lookX, actions.lookY, actions.lookSens, actions.invertY);
 
     const f = this.forward();
     const r = this.right();
-    const mag = Math.hypot(actions.moveX, actions.moveY);
-    this.sprinting = Boolean(!this.crouch && this.grounded && (actions.sprint || (actions.autoSprint && mag > 0.86)));
-    const maxSp = this.crouch ? CROUCH : this.sprinting ? SPRINT : this.parachuteDeployed ? CHUTE_GLIDE : WALK;
-    const wishX = f.x * actions.moveY + r.x * actions.moveX;
-    const wishZ = f.z * actions.moveY + r.z * actions.moveX;
+    const rawMag = Math.hypot(actions.moveX, actions.moveY);
+    const inputMag = Math.min(1, rawMag);
+    this.sprinting = Boolean(!this.crouch && this.grounded && actions.moveY > 0.25 && (actions.sprint || (actions.autoSprint && inputMag > 0.86)));
+
+    let maxSp = this.crouch ? CROUCH : this.sprinting ? SPRINT : this.parachuteDeployed ? CHUTE_GLIDE : WALK;
+    // Athletic footwork: sprinting favors forward drive rather than impossible full-speed side strafing.
+    const strafeScale = this.sprinting ? 0.70 : 0.92;
+    const wishForward = actions.moveY;
+    const wishSide = actions.moveX * strafeScale;
+    const wishX = f.x * wishForward + r.x * wishSide;
+    const wishZ = f.z * wishForward + r.z * wishSide;
     const wishLen = Math.hypot(wishX, wishZ);
     const nx = wishLen > 0 ? wishX / wishLen : 0;
     const nz = wishLen > 0 ? wishZ / wishLen : 0;
-    const accel = this.grounded ? 18 : this.parachuteDeployed ? 3.4 : 4.5;
+    maxSp *= inputMag;
     const targetVx = nx * maxSp;
     const targetVz = nz * maxSp;
+
     const pvX = this.vx;
     const pvZ = this.vz;
-    this.vx += (targetVx - this.vx) * Math.min(1, accel * dt);
-    this.vz += (targetVz - this.vz) * Math.min(1, accel * dt);
+    const currentSpeed = Math.hypot(this.vx, this.vz);
+    const targetSpeed = Math.hypot(targetVx, targetVz);
+    const alignment = currentSpeed > 0.15 && targetSpeed > 0.15
+      ? (this.vx * targetVx + this.vz * targetVz) / (currentSpeed * targetSpeed)
+      : 1;
+    let accel: number;
+    if (!this.grounded) accel = this.parachuteDeployed ? 4.4 : 3.2;
+    else if (inputMag < 0.05) accel = this.crouch ? 16 : 22;
+    else if (alignment < 0.15) accel = this.sprinting ? 19 : 26;
+    else accel = this.sprinting ? 11.5 : this.crouch ? 10 : 17.5;
+
+    const moved = moveToward2D(this.vx, this.vz, targetVx, targetVz, accel * dt);
+    this.vx = moved.x;
+    this.vz = moved.z;
     this.ax = (this.vx - pvX) / Math.max(dt, 1e-4);
     this.az = (this.vz - pvZ) / Math.max(dt, 1e-4);
     this.forwardAccel = this.ax * f.x + this.az * f.z;
+    this.lateralAccel = this.ax * r.x + this.az * r.z;
+    this.forwardSpeed = this.vx * f.x + this.vz * f.z;
+    this.lateralSpeed = this.vx * r.x + this.vz * r.z;
 
     const wasGround = this.grounded;
     if (this.grounded) {
@@ -260,8 +301,6 @@ export class Player {
   }
 
   fallDamage(): "none" | "hurt" | "dead" {
-    // The tower is intentionally vertically traversable in both directions.
-    // Falling past one floor is not an automatic death/reset anymore.
     if (this.y < -80) return "dead";
     if (this.grounded && this.airTime > 0.05) {
       const drop = this.fallFrom - this.y;
