@@ -22,6 +22,12 @@ import {
   upperCascadeFinite,
   type UpperControls,
 } from "./upper-cascade.ts";
+import {
+  applyCompositionBodyForces,
+  compositionBodiesFinite,
+  enforceCompositionBodyContacts,
+  ensureCompositionBodies,
+} from "./composition-bodies.ts";
 
 export { toggleTransferBrake } from "./linked-cascade.ts";
 
@@ -172,6 +178,7 @@ export function ensureMc01Network(rube: RubeState): void {
   }
   updateMc01CableGeometry(rube);
   ensureUpperCascadeState(chain);
+  ensureCompositionBodies(chain);
 }
 
 function updateMc01CableGeometry(rube: RubeState): void {
@@ -353,12 +360,15 @@ export function stepRubeMechanics(
   upperControls: UpperControls = ZERO_UPPER_CONTROLS,
 ): void {
   ensureMc01Network(rube);
+  const chain = ensureLinkedCascadeState(rube);
   const external: GeneralizedForces = {};
   applyMc01Forces(rube, external);
-  const beforeUpper = captureUpperStep(ensureLinkedCascadeState(rube));
+  const beforeUpper = captureUpperStep(chain);
   applyUpperCascadeForces(rube, upperControls, external);
+  applyCompositionBodyForces(chain, external);
   const solved = stepLinkedCascade(rube, dt, external);
   enforceUpperCascadeConstraints(rube, beforeUpper);
+  enforceCompositionBodyContacts(chain);
   updateMc01CableGeometry(rube);
   syncLegacyProjection(rube, solved);
 }
@@ -366,7 +376,8 @@ export function stepRubeMechanics(
 export function rubeFinite(rube: RubeState): boolean {
   ensureMc01Network(rube);
   syncLegacyProjection(rube);
-  return linkedCascadeFinite(rube) && upperCascadeFinite(rube) && [
+  const chain = ensureLinkedCascadeState(rube);
+  return linkedCascadeFinite(rube) && upperCascadeFinite(rube) && compositionBodiesFinite(chain) && [
     rube.lever.angle_rad,
     rube.lever.omega_radps,
     rube.lever.net_torque_nm,
