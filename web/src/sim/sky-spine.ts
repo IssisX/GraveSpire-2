@@ -1,5 +1,10 @@
 import { G, clamp, type LinkedCascadeState, type MechanicalDofState } from "./types.ts";
-import { addGeneralizedForce, mechDof, type GeneralizedForces } from "./mechanical-network.ts";
+import {
+  addGeneralizedForce,
+  mechDof,
+  retainOverCenter,
+  type GeneralizedForces,
+} from "./mechanical-network.ts";
 import { MECH_ID } from "./mechanical-ids.ts";
 
 /**
@@ -12,7 +17,7 @@ export const SKY = {
   baseY: 91.0,
   windLatchTravelM: 0.24,
   windLatchClearM: 0.045,
-  windLatchOverCenterM: 0.028,
+  windLatchOverCenterM: 0.012,
   windLatchBridgeStartM: 12.0,
   windLatchGain: 0.72,
   windLatchK: 2.0e5,
@@ -38,7 +43,7 @@ export const SKY = {
   cableC: 9.0e4,
   pendulumLatchTravelM: 0.30,
   pendulumLatchClearM: 0.050,
-  pendulumLatchOverCenterM: 0.030,
+  pendulumLatchOverCenterM: 0.012,
   pendulumTripQ: 20.8,
   pendulumLatchGain: 0.72,
   pendulumLatchK: 2.0e5,
@@ -168,12 +173,15 @@ export function enforceSkySpineConstraints(chain: LinkedCascadeState): void {
   ensureSkySpineState(chain);
   const windLatch = mechDof(chain.network, MECH_ID.mc11WindLatch);
   const sail = mechDof(chain.network, MECH_ID.mc11Sail);
+  retainOverCenter(windLatch, SKY.windLatchOverCenterM, SKY.windLatchClearM);
   if (windLatch.q < SKY.windLatchClearM && sail.q > 0) {
     sail.q = 0;
     if (sail.v > 0) sail.v = 0;
   }
+
   const pendulumLatch = mechDof(chain.network, MECH_ID.mc12PendulumLatch);
   const pendulum = mechDof(chain.network, MECH_ID.mc12Pendulum);
+  retainOverCenter(pendulumLatch, SKY.pendulumLatchOverCenterM, SKY.pendulumLatchClearM);
   if (pendulumLatch.q < SKY.pendulumLatchClearM && pendulum.q > SKY.pendulumInitialRad) {
     pendulum.q = SKY.pendulumInitialRad;
     if (pendulum.v > 0) pendulum.v = 0;
