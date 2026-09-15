@@ -1,13 +1,13 @@
 /** Declared Act I reduction. Not GDD §7 / §16. */
 export const MODEL_CLASS =
-  "Act I reduced: lumped freight/frame/gate coupling + declared elastic members + tension-only cables + finite motors/brakes/pressure + persistent plastic set + MC-01 planar lever/ballast/lift + linked generalized-coordinate MC-02/MC-03 rocker/pawl/counterweight/carriage/bridge mechanics. Not co-rotational FEM, not general 6-DOF contact, not fracture-energy, not Craig–Bampton.";
+  "Act I reduced: lumped freight/frame/gate coupling + declared elastic members + tension-only cables + finite motors/brakes/pressure + persistent plastic set + MC-01 planar lever/ballast/lift + linked generalized-coordinate MC-02/MC-03 rocker/pawl/counterweight/carriage/bridge mechanics + MC-04 preloaded spring shuttle released by bridge contact. Not co-rotational FEM, not general 6-DOF contact, not fracture-energy, not Craig–Bampton.";
 
 export const AUTHORITY_DT = 1 / 30;
 export const MECHANICS_DT = 1 / 120;
 export const SUBSTEPS = 4;
 export const G = 9.80665;
 
-export type DistrictId = "FS07" | "FS08" | "SHA" | "LT12" | "MC01" | "MC02" | "MC03";
+export type DistrictId = "FS07" | "FS08" | "SHA" | "LT12" | "MC01" | "MC02" | "MC03" | "MC04";
 
 export const DISTRICT_META: Record<
   DistrictId,
@@ -20,6 +20,7 @@ export const DISTRICT_META: Record<
   MC01: { id: "MC01", name: "Mechanical Cascade 01", short: "MC-01" },
   MC02: { id: "MC02", name: "Gravity Transfer", short: "MC-02" },
   MC03: { id: "MC03", name: "Gravity Bridge", short: "MC-03" },
+  MC04: { id: "MC04", name: "Spring Shuttle", short: "MC-04" },
 };
 
 export const COMMANDS = [
@@ -183,7 +184,7 @@ export interface RubeState {
   lift: RubeLiftState;
   rope: RubeRopeState;
   energy: RubeEnergyState;
-  /** Added lazily for saves written before MC-02 / MC-03 existed. */
+  /** Added lazily for saves written before MC-02 / MC-03 / MC-04 existed. */
   chain?: LinkedCascadeState;
 }
 
@@ -332,6 +333,7 @@ export function clamp01(v: number): number {
 }
 
 export function districtAt(x: number, z: number): DistrictId {
+  if (z <= -25 && x >= 98) return "MC04";
   if (z <= -25 && x >= 86) return "MC03";
   if (z <= -25 && x >= 67) return "MC02";
   if (z <= -20 && x >= 46 && x < 67) return "MC01";
