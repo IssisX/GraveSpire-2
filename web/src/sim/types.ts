@@ -1,13 +1,13 @@
 /** Declared Act I reduction. Not GDD §7 / §16. */
 export const MODEL_CLASS =
-  "Act I reduced: lumped 3-body coupling cell (freight + frame + gate) + declared elastic members (axial, biaxial bending, torsion) + tension-only cables + finite motors/brakes/pressure + persistent plastic set. Not co-rotational FEM, not fracture-energy, not Craig–Bampton.";
+  "Act I reduced: lumped freight/frame/gate coupling + declared elastic members + tension-only cables + finite motors/brakes/pressure + persistent plastic set + one authoritative planar multibody transfer-cascade cell (lever/ballast/routed rope/lift). Not co-rotational FEM, not general 6-DOF contact, not fracture-energy, not Craig–Bampton.";
 
 export const AUTHORITY_DT = 1 / 30;
 export const MECHANICS_DT = 1 / 120;
 export const SUBSTEPS = 4;
 export const G = 9.80665;
 
-export type DistrictId = "FS07" | "FS08" | "SHA" | "LT12";
+export type DistrictId = "FS07" | "FS08" | "SHA" | "LT12" | "MC01";
 
 export const DISTRICT_META: Record<
   DistrictId,
@@ -17,6 +17,7 @@ export const DISTRICT_META: Record<
   FS08: { id: "FS08", name: "Transfer Neck", short: "FS-08" },
   SHA: { id: "SHA", name: "Circ Shop — Hab Band A", short: "SH-A" },
   LT12: { id: "LT12", name: "Gallery 12", short: "LT-12" },
+  MC01: { id: "MC01", name: "Mechanical Cascade 01", short: "MC-01" },
 };
 
 export const COMMANDS = [
@@ -47,6 +48,8 @@ export type Act =
   | { type: "abandon_drive" }
   | { type: "sling"; a: string; b: string }
   | { type: "clear_sling" }
+  | { type: "rube_push_ballast"; direction: -1 | 1 }
+  | { type: "rube_toggle_latch" }
   | { type: "mark_save_used" }
   | { type: "end_act" };
 
@@ -82,6 +85,50 @@ export interface GateState {
   inventory_kg: number;
   seal_misalignment_m: number;
   wedged: boolean;
+}
+
+export interface RubeLeverState {
+  angle_rad: number;
+  omega_radps: number;
+  mass_kg: number;
+  inertia_kgm2: number;
+  net_torque_nm: number;
+  latch_engaged: boolean;
+  latch_angle_rad: number;
+}
+
+export interface RubeBallastState {
+  mass_kg: number;
+  s_m: number;
+  velocity_mps: number;
+}
+
+export interface RubeLiftState {
+  mass_kg: number;
+  y_m: number;
+  velocity_mps: number;
+}
+
+export interface RubeRopeState {
+  rest_length_m: number;
+  length_m: number;
+  tension_n: number;
+  slack: boolean;
+  rated_tension_n: number;
+}
+
+export interface RubeEnergyState {
+  kinetic_j: number;
+  potential_j: number;
+  dissipated_j: number;
+}
+
+export interface RubeState {
+  lever: RubeLeverState;
+  ballast: RubeBallastState;
+  lift: RubeLiftState;
+  rope: RubeRopeState;
+  energy: RubeEnergyState;
 }
 
 export interface MemberState {
@@ -189,6 +236,8 @@ export interface WorldState {
   electrical: ElectricalState;
   npcs: NpcState[];
   flags: Flags;
+  /** Added lazily for compatibility with pre-cascade saves. */
+  rube?: RubeState;
   events: SimEvent[];
   authority_tick: number;
   mechanics_step: number;
@@ -227,6 +276,7 @@ export function clamp01(v: number): number {
 }
 
 export function districtAt(x: number, z: number): DistrictId {
+  if (z <= -20 && x >= 46 && x <= 70) return "MC01";
   if (z >= 11) return "LT12";
   if (x >= 64) return "SHA";
   if (x >= 42) return "FS08";
