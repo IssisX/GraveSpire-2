@@ -1,3 +1,4 @@
+import { carrierWorldPos } from "@/sim/geometry.ts";
 import * as THREE from "three";
 import type { Collider } from "./collision.ts";
 import { createMaterials, makeSignTexture, type Materials } from "./materials.ts";
@@ -39,6 +40,24 @@ export type Bindings = {
   strainMesh: THREE.Mesh;
   pulpitGlass: THREE.Mesh;
   trolley: THREE.Mesh;
+  dockLamps: { ok: THREE.Mesh; close: THREE.Mesh; far: THREE.Mesh };
+  dockChevrons: THREE.Mesh;
+  gatePanel: THREE.Group;
+  gateLamps: { power: THREE.Mesh; pressure: THREE.Mesh; open: THREE.Mesh };
+  gateNeedle: THREE.Mesh;
+  breakerHandles: Map<string, THREE.Mesh>;
+  breakerLamps: Map<string, THREE.Mesh>;
+  busRuns: THREE.Mesh[];
+  emergency: THREE.Mesh[];
+  jackStand: THREE.Mesh;
+  gallerySlabs: Map<string, THREE.Mesh>;
+  galleryChain: THREE.Mesh;
+  slingRope: THREE.Mesh;
+  slingPreview: THREE.Line;
+  driveHousing: THREE.Mesh;
+  driveWreck: THREE.Mesh;
+  wedgePin: THREE.Mesh;
+  neckPlates: THREE.Mesh[];
 };
 
 export type Level = {
@@ -399,7 +418,7 @@ export function buildLevel(scene: THREE.Scene): Level {
   }
   k.cyl(0.8, 0.8, 3.4, 38.4, 1.8, -4.6, mats.steelDark);
   k.cyl(0.7, 0.7, 2.8, 38.4, 1.5, -6.4, mats.steel);
-  k.interact("gate", "Isolation gate G-07", 40.2, 2.2, -1.2, 3.4, "machine");
+  k.interact("gate", "Isolation gate G-07", 39.15, 1.7, -3.55, 2.4, "machine");
 
   // process board — isolation is a real breaker, not a UI toggle
   k.box(0.22, 2.7, 3.9, 38.85, 1.85, -8.15, mats.steelBlack, { id: "proc_board" });
@@ -453,8 +472,10 @@ export function buildLevel(scene: THREE.Scene): Level {
     for (const z of [-8.5, 8.5]) k.box(0.65, 10, 0.65, x, 5, z, mats.steelDark, { id: `ncol_${x}` });
   }
   k.ibeam(18, 53, 9.4, 0, "x", mats.steel);
-  k.box(3.4, 2.2, 2.6, 56.2, 1.2, 2.4, mats.carrier, { id: "drive_box", collider: true });
+  const driveHousing = k.box(3.4, 2.2, 2.6, 56.2, 1.2, 2.4, mats.carrier, { id: "drive_box", collider: true });
   k.box(3.4, 0.08, 2.6, 56.2, 2.34, 2.4, mats.hazard, { collider: false });
+  const driveWreck = k.box(3.4, 1.1, 2.6, 56.2, 0.7, 2.4, mats.rust, { collider: false });
+  driveWreck.visible = false;
   k.interact("drive", "Transfer drive housing", 56.2, 1.6, 2.4, 2.4, "machine");
   k.interact("frame", "Load-transfer frame", 52, 3.2, 0, 3.5, "machine");
   k.interact("dock", "Neck receiving deck", 36.5, 2.3, 0, 3.2, "world");
@@ -477,10 +498,34 @@ export function buildLevel(scene: THREE.Scene): Level {
   }
   k.box(18, 0.2, 4.2, 21, -9.4, 0, mats.steelDark, { collider: false });
 
-  // receiving deck over well east
+  // receiving deck over well east — this is the dock, not a HUD number
   k.box(10, 0.22, 6.4, 36, 2.28, 0, mats.steel, { id: "recv" });
   k.box(10, 0.05, 0.4, 36, 2.42, 3.1, mats.hazard, { collider: false });
   k.box(10, 0.05, 0.4, 36, 2.42, -3.1, mats.hazard, { collider: false });
+  const dockChevrons = k.box(3.6, 0.04, 2.2, 36, 2.42, 0, mats.hazard, { collider: false, cast: false });
+  const mkDockLamp = (emissive: number, x: number) => {
+    const m = new THREE.Mesh(
+      new THREE.SphereGeometry(0.07, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0x14181c, emissive, emissiveIntensity: 0.08, roughness: 0.35 }),
+    );
+    m.position.set(x, 2.62, 2.85);
+    scene.add(m);
+    return m;
+  };
+  const dockLamps = {
+    far: mkDockLamp(0xc47a4a, 34.6),
+    close: mkDockLamp(0xc8b44a, 36.0),
+    ok: mkDockLamp(0x6ec8a0, 37.4),
+  };
+
+  // traverse marks on the gantry rail — world-readable meters
+  for (let m = -8; m <= 16; m += 2) {
+    const mark = m % 8 === 0;
+    k.box(mark ? 0.08 : 0.04, 0.04, mark ? 0.55 : 0.28, 20 + m, 11.55, -2.15, mark ? mats.hazard : mats.steel, {
+      collider: false,
+      cast: false,
+    });
+  }
 
   // lights bay
   for (const x of [8, 18, 28, 36]) {
@@ -490,8 +535,10 @@ export function buildLevel(scene: THREE.Scene): Level {
   }
 
   // --- Gallery 12 ---
-  k.box(50, 0.28, 16, 33, 2.31, 19.5, mats.concrete, { id: "gal_floor" });
+  k.box(8, 0.28, 16, 12, 2.31, 19.5, mats.concrete, { id: "gal_west" });
+  k.box(8, 0.28, 16, 54, 2.31, 19.5, mats.concrete, { id: "gal_east" });
   k.box(50, 0.5, 16, 33, -0.2, 19.5, mats.steelDark, { collider: false });
+  const gallerySlabs = new Map<string, THREE.Mesh>();
   for (const x of [16, 24, 32, 40, 48]) {
     k.box(0.55, 2.3, 0.55, x, 1.1, 12.6, mats.steel, { id: `gcol_s_${x}` });
     k.box(0.55, 2.3, 0.55, x, 1.1, 26.4, mats.steel, { id: `gcol_n_${x}` });
@@ -506,6 +553,8 @@ export function buildLevel(scene: THREE.Scene): Level {
     const m = k.box(0.38, 0.42, 14.2, x, 2.15, 19.5, mats.steel, { id, collider: false });
     members.set(id, m);
     k.interact(id, `Gallery span ${id.slice(-1).toUpperCase()}`, x, 2.5, 19.5, 2.1, "member");
+    const slab = k.box(8, 0.28, 16, x, 2.31, 19.5, mats.concrete, { id: `slab_${id}` });
+    gallerySlabs.set(id, slab);
   }
   k.railing(9, 27.2, 57, 27.2, 2.45);
   k.railing(9, 11.8, 13, 11.8, 2.45);
@@ -605,6 +654,125 @@ export function buildLevel(scene: THREE.Scene): Level {
 
   k.interact("cable", "Hoist rope 07-A", 20, 6, 0, 2.5, "machine");
 
+  // local gate station — torque is here, not from the west deck
+  const gatePanel = new THREE.Group();
+  const gpBody = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.62, 0.42), mats.steelBlack);
+  const gpFace = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.48, 0.34), mats.emissiveCool);
+  gpFace.position.x = 0.1;
+  const mkGLamp = (emissive: number, y: number, z: number) => {
+    const m = new THREE.Mesh(
+      new THREE.SphereGeometry(0.028, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0x14181c, emissive, emissiveIntensity: 0.08, roughness: 0.4 }),
+    );
+    m.position.set(0.12, y, z);
+    return m;
+  };
+  const gateLampPower = mkGLamp(0x7ec8d4, 0.18, 0.1);
+  const gateLampPressure = mkGLamp(0xc47a4a, 0.18, 0);
+  const gateLampOpen = mkGLamp(0x6ec8a0, 0.18, -0.1);
+  const gateNeedle = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.16, 0.02), mats.hazard);
+  gateNeedle.position.set(0.13, -0.04, 0);
+  gatePanel.add(gpBody, gpFace, gateLampPower, gateLampPressure, gateLampOpen, gateNeedle);
+  gatePanel.position.set(39.15, 1.55, -3.55);
+  scene.add(gatePanel);
+
+  const wedgePin = k.box(0.12, 0.7, 0.12, 40.15, 1.1, -3.15, mats.hazard, { collider: false, id: "wedge" });
+
+  // breaker handles on the process board
+  const breakerHandles = new Map<string, THREE.Mesh>();
+  const breakerLamps = new Map<string, THREE.Mesh>();
+  const procBreakers: [string, number][] = [
+    ["brk_gen", -9.4],
+    ["brk_drive", -8.5],
+    ["brk_gate", -7.6],
+    ["brk_hab", -6.7],
+  ];
+  for (const [id, z] of procBreakers) {
+    const handle = k.box(0.08, 0.28, 0.06, 38.62, 2.05, z, mats.hazard, { collider: false, cast: false });
+    const lamp = new THREE.Mesh(
+      new THREE.SphereGeometry(0.03, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0x14181c, emissive: 0x6ec8a0, emissiveIntensity: 0.1, roughness: 0.4 }),
+    );
+    lamp.position.set(38.68, 2.35, z);
+    scene.add(lamp);
+    breakerHandles.set(id, handle);
+    breakerLamps.set(id, lamp);
+  }
+  const shopHandle = k.box(0.08, 0.28, 0.06, 86.32, 2.15, 2.55, mats.hazard, { collider: false, cast: false });
+  const westHandle = k.box(0.08, 0.28, 0.06, 86.32, 2.15, 1.35, mats.paintGreen, { collider: false, cast: false });
+  const shopLamp = new THREE.Mesh(
+    new THREE.SphereGeometry(0.03, 8, 6),
+    new THREE.MeshStandardMaterial({ color: 0x14181c, emissive: 0x6ec8a0, emissiveIntensity: 0.08, roughness: 0.4 }),
+  );
+  shopLamp.position.set(86.28, 2.45, 2.55);
+  scene.add(shopLamp);
+  const westLamp = new THREE.Mesh(
+    new THREE.SphereGeometry(0.03, 8, 6),
+    new THREE.MeshStandardMaterial({ color: 0x14181c, emissive: 0x6ec8a0, emissiveIntensity: 0.08, roughness: 0.4 }),
+  );
+  westLamp.position.set(86.28, 2.45, 1.35);
+  scene.add(westLamp);
+  breakerHandles.set("brk_shop", shopHandle);
+  breakerHandles.set("brk_west", westHandle);
+  breakerLamps.set("brk_shop", shopLamp);
+  breakerLamps.set("brk_west", westLamp);
+
+  const busRuns: THREE.Mesh[] = [];
+  for (let x = 8; x < 40; x += 4) {
+    const run = k.box(3.4, 0.05, 0.12, x, 10.52, 10.4, mats.emissiveCool, { collider: false, cast: false });
+    busRuns.push(run);
+  }
+  const neckBus = k.box(18, 0.05, 0.12, 50, 8.6, -8.4, mats.emissiveCool, { collider: false, cast: false });
+  busRuns.push(neckBus);
+
+  const emergency: THREE.Mesh[] = [];
+  for (const [x, z] of [
+    [12, 3.55],
+    [21, 3.55],
+    [30, 3.55],
+    [12, -3.55],
+    [21, -3.55],
+    [30, -3.55],
+  ] as const) {
+    const strip = k.box(2.4, 0.04, 0.08, x, 0.16, z, mats.emissiveWarn, { collider: false, cast: false });
+    emergency.push(strip);
+  }
+
+  const jackStand = k.cyl(0.16, 0.22, 1.05, 53, 0.55, 0.15, mats.hazard);
+  jackStand.visible = false;
+
+  const galleryChain = k.box(0.08, 1.15, 14, 32, 3.05, 19.5, mats.hazard, { collider: false, cast: false });
+  galleryChain.visible = false;
+
+  const slingRope = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1, 6), mats.cable);
+  slingRope.visible = false;
+  scene.add(slingRope);
+  const slingGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 1, 0),
+  ]);
+  const slingPreview = new THREE.Line(
+    slingGeo,
+    new THREE.LineDashedMaterial({ color: 0xc8b44a, dashSize: 0.25, gapSize: 0.12, transparent: true, opacity: 0.85 }),
+  );
+  slingPreview.visible = false;
+  scene.add(slingPreview);
+
+  const neckPlates: THREE.Mesh[] = [
+    k.box(4.2, 0.12, 3.6, 48.4, 0.08, 0, mats.diamond, { collider: false }),
+    k.box(4.2, 0.12, 3.6, 53.2, 0.08, 0, mats.diamond, { collider: false }),
+  ];
+
+  k.colliders.push({
+    id: "neck_gap",
+    minx: 49.4,
+    maxx: 50.6,
+    miny: 0,
+    maxy: 2.4,
+    minz: -2.6,
+    maxz: 2.6,
+  });
+
   const bindings: Bindings = {
     carrier,
     payload,
@@ -632,6 +800,24 @@ export function buildLevel(scene: THREE.Scene): Level {
     strainMesh,
     pulpitGlass,
     trolley,
+    dockLamps,
+    dockChevrons,
+    gatePanel,
+    gateLamps: { power: gateLampPower, pressure: gateLampPressure, open: gateLampOpen },
+    gateNeedle,
+    breakerHandles,
+    breakerLamps,
+    busRuns,
+    emergency,
+    jackStand,
+    gallerySlabs,
+    galleryChain,
+    slingRope,
+    slingPreview,
+    driveHousing,
+    driveWreck,
+    wedgePin,
+    neckPlates,
   };
 
   return {
@@ -643,14 +829,11 @@ export function buildLevel(scene: THREE.Scene): Level {
     dispose: () => {
       k.geos.forEach((g) => g.dispose());
       steamGeo.dispose();
+      slingGeo.dispose();
     },
   };
 }
 
 export function carrierWorld(lateral: number, height: number, defl: number) {
-  return {
-    x: 20 + lateral,
-    y: height - defl * 2.4,
-    z: 0,
-  };
+  return carrierWorldPos(lateral, height, defl);
 }

@@ -1,17 +1,21 @@
 import * as THREE from "three";
+import { applyCoupling } from "./coupling.ts";
+import { npcMutter } from "./npc-ai.ts";
+import { tickSoundscape } from "./soundscape.ts";
+import { dockEnvelope } from "@/sim/geometry.ts";
 import { Simulation } from "@/sim/simulation.ts";
 import { inspectTarget } from "@/sim/inspect.ts";
 import { DISTRICT_META, districtAt, MODEL_CLASS } from "@/sim/types.ts";
-import { endingCopy, evaluateMissions, evaluateTraversal, inhabitantCanReachShop } from "@/sim/missions.ts";
+import { endingCopy, evaluateMissions, inhabitantCanReachShop } from "@/sim/missions.ts";
 import { applySave, captureSave, defaultPlayer, readSave, writeSave } from "@/sim/save.ts";
 import { GameAudio } from "./audio.ts";
 import { mantleProbe } from "./collision.ts";
 import { commitAction, resolveContext, worldWarning, type CtxAction } from "./context.ts";
 import { DIALOGUE, talk } from "./dialogue.ts";
 import { createGait, gaitOffset, impulseGait, stepGait } from "./gait.ts";
-import { applyGraphics, steamStep } from "./graphics.ts";
+import { applyGraphics } from "./graphics.ts";
 import { createInput, detectTouch } from "./input.ts";
-import { buildLevel, carrierWorld } from "./level.ts";
+import { buildLevel } from "./level.ts";
 import { OPENING_TOTAL, openingBeatAt, openingCamera } from "./opening.ts";
 import { applyOperate, operateKind, operateStationId } from "./operate.ts";
 import { Player } from "./player.ts";
@@ -131,129 +135,9 @@ export function mountGame(canvas: HTMLCanvasElement) {
     audio.resume();
   });
 
-  function lamp(mesh: THREE.Mesh, on: boolean, hot = false) {
-    const mat = mesh.material as THREE.MeshStandardMaterial;
-    mat.emissiveIntensity = on ? (hot ? 1.8 : 1.25) : 0.06;
-  }
-
   function bindView(px?: number, pz?: number) {
-    const s = sim.state();
-    const defl = s.frame.deflection_m;
-    const pos = carrierWorld(s.freight.lateral_m, s.freight.height_m, Math.min(defl, 0.35));
-    level.bindings.carrier.position.set(pos.x, pos.y, pos.z);
-    const crateY = pos.y - 1.35;
-    if (!s.freight.payload_released) {
-      level.bindings.payload.visible = true;
-      level.bindings.payload.position.set(pos.x, crateY, pos.z);
-      level.bindings.payloadDeck.visible = false;
-    } else {
-      level.bindings.payload.visible = false;
-      level.bindings.payloadDeck.visible = true;
-      level.bindings.payloadDeck.position.set(20 + Math.max(4.2, s.freight.lateral_m), 3.15 - defl * 1.2, 0);
-    }
-    level.bindings.hookLight.position.set(pos.x, pos.y + 0.5, pos.z);
-    level.bindings.hookLight.intensity = s.electrical.bay_lights ? 22 : 3;
-    const gantryY = 11.1 - defl * 2.4;
-    level.bindings.gantry.position.y = gantryY;
-    level.bindings.trolley.position.x = pos.x - 22;
-    const cableLen = Math.max(0.3, gantryY - pos.y - 0.4);
-    level.bindings.cable.position.set(pos.x, pos.y + cableLen * 0.5 + 0.4, pos.z);
-    level.bindings.cable.scale.set(1, cableLen, 1);
-    level.bindings.frame.position.set(52, 4.6 - Math.min(defl, 0.35) * 4.0, 0);
-    level.bindings.frame.rotation.z = s.frame.twist_rad * 3.0;
-    level.bindings.gate.rotation.z = -s.gate.angle_rad;
-    level.bindings.gate.rotation.x = s.gate.seal_misalignment_m * 2.4;
-    level.bindings.gate.position.set(40.4, 3.2 - defl * 1.5, 0);
-    const hot = (s.freight.brake_temperature_k - 293) / 160;
-    (level.bindings.brakeGlow.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.3 + Math.max(0, hot);
-    for (const [id, mesh] of level.bindings.members) {
-      const m = s.members.find((x) => x.id === id);
-      if (!m) continue;
-      mesh.visible = !m.cut;
-      mesh.position.y = 2.15 - m.sag_m * 8;
-      mesh.rotation.z = m.twist_rad * 4;
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.color.set(m.braced ? 0x7a9aaa : m.jacked ? 0x8a7a4a : 0x8a949c);
-    }
-    for (const n of s.npcs) {
-      const g = level.bindings.npcs.get(n.id);
-      if (!g) continue;
-      g.position.set(n.x, n.y, n.z);
-      if (px != null && pz != null) {
-        const dx = px - n.x;
-        const dz = pz - n.z;
-        const dist = Math.hypot(dx, dz);
-        if (dist < 9 && dist > 0.25) g.rotation.y = Math.atan2(-dx, -dz);
-        else g.rotation.y = n.yaw;
-      } else {
-        g.rotation.y = n.yaw;
-      }
-    }
-    const shopOn = s.electrical.shop_powered;
-    for (const m of level.bindings.shopLights) {
-      (m.material as THREE.MeshStandardMaterial).emissiveIntensity = shopOn ? 0.9 : 0.05;
-    }
-    for (const l of level.bindings.bayLights) {
-      if (l.visible) l.intensity = s.electrical.bay_lights ? 14 : 0.55;
-    }
-
-    const cfg = getSettings();
-    const venting = sim.active("GateVent") || s.gate.pressure_pa < 200000;
-    steamStep(level, 1 / 30, venting, cfg.steamDensity, cfg.reducedMotion);
-
-    lamp(level.bindings.pendantLamps.power, s.electrical.carrier_powered);
-    lamp(level.bindings.pendantLamps.brake, s.freight.brake_engaged, s.freight.brake_temperature_k > 400);
-    lamp(level.bindings.pendantLamps.offset, Math.abs(s.freight.lateral_m - 16) > 1.8 || Math.abs(s.frame.twist_rad) > 0.008);
-    const glass = level.bindings.pulpitGlass.material as THREE.MeshStandardMaterial;
-    const twistK = Math.min(1, Math.abs(s.frame.twist_rad) / 0.04);
-    glass.emissive.setRGB(0.35 + twistK * 0.45, 0.55 - twistK * 0.25, 0.62 - twistK * 0.4);
-    glass.emissiveIntensity = s.electrical.carrier_powered ? 0.7 + twistK : 0.08;
-
-    const lean = s.frame.twist_rad * 6 + defl * 8;
-    for (const rod of level.bindings.telltales) {
-      rod.rotation.z = lean;
-      rod.rotation.x = defl * 4;
-    }
-    const strain = Math.min(1, Math.abs(s.frame.twist_rad) / 0.035 + defl / 0.12);
-    const sm = level.bindings.strainMesh.material as THREE.MeshStandardMaterial;
-    sm.emissive.setRGB(0.2 + strain * 0.7, 0.35 - strain * 0.2, 0.15);
-    sm.emissiveIntensity = 0.2 + strain * 1.6;
-    level.bindings.strainLamp.color.setRGB(0.3 + strain * 0.7, 0.25, 0.12);
-    level.bindings.strainLamp.intensity = 0.3 + strain * 8;
-
-    const carrierCol = level.colliders.find((c) => c.id === "carrier");
-    if (carrierCol) {
-      carrierCol.minx = pos.x - 2.2;
-      carrierCol.maxx = pos.x + 2.2;
-      carrierCol.miny = pos.y - 0.35;
-      carrierCol.maxy = pos.y + 0.38;
-      carrierCol.minz = pos.z - 1.55;
-      carrierCol.maxz = pos.z + 1.55;
-    }
-    const gateCol = level.colliders.find((c) => c.id === "gate");
-    if (gateCol) gateCol.disabled = s.gate.angle_rad > 0.95;
-    const trav = evaluateTraversal(s);
-    const shopDoor = level.colliders.find((c) => c.id === "shop_door");
-    if (shopDoor) shopDoor.disabled = Boolean(trav.find((e) => e.id === "neck_to_shop")?.valid);
-    const galDoor = level.colliders.find((c) => c.id === "gal_shop_door");
-    if (galDoor) galDoor.disabled = Boolean(trav.find((e) => e.id === "gallery_to_shop")?.valid);
-
-    for (const it of level.interactables) {
-      if (it.id === "carrier") {
-        it.x = pos.x;
-        it.y = pos.y;
-        it.z = pos.z;
-      }
-      if (it.kind === "npc") {
-        const n = s.npcs.find((x) => x.id === it.id);
-        if (n) {
-          it.x = n.x;
-          it.y = n.y + 1.2;
-          it.z = n.z;
-        }
-      }
-    }
-    return pos;
+    const ui = useGame.getState();
+    return applyCoupling(level, sim, px, pz, ui.slingA, ui.look?.id ?? null);
   }
 
   function flash(message: string) {
@@ -310,6 +194,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
         gateOpen: s.gate.angle_rad > 0.95,
         height_m: s.freight.height_m,
         lateral_m: s.freight.lateral_m,
+        dock: dockEnvelope(s.freight),
       },
       objectives: evaluateMissions(s),
       events: s.events.slice(-6),
@@ -361,7 +246,9 @@ export function mountGame(canvas: HTMLCanvasElement) {
     setPhasePlaying();
     hintUntil = performance.now() + 12000;
     useGame.getState().patch({
-      hint: touch ? "Walk to the pulpit. Action on the pendant — not the hanging load." : "Walk to the pulpit. E on the pendant.",
+      hint: touch
+        ? "Walk to the pulpit. Action on the pendant. Raise, then traverse east to the painted deck."
+        : "Walk to the pulpit. E on the pendant. Raise, then traverse east to the painted deck.",
     });
   }
 
@@ -549,8 +436,15 @@ export function mountGame(canvas: HTMLCanvasElement) {
       camera.position.z - Math.cos(yaw) * Math.cos(pitch),
     );
 
-    const load = Math.abs(sim.state().freight.vertical_velocity_mps) + Math.abs(sim.state().freight.lateral_velocity_mps);
-    audio.setMotor(Math.min(1, load / 2.5), Boolean(useGame.getState().operateId));
+    tickSoundscape(audio, sim.state(), Boolean(useGame.getState().operateId));
+
+    let mutter: string | null = null;
+    if (ctx.action?.kind === "npc") {
+      mutter = npcMutter(sim.state(), ctx.action.id, ctx.action.dist);
+    } else if (ctx.look?.kind === "npc") {
+      mutter = npcMutter(sim.state(), ctx.look.id, ctx.look.dist);
+    }
+    if (mutter !== ui.mutter) useGame.getState().patch({ mutter });
 
     if (hintUntil && now > hintUntil) {
       hintUntil = 0;

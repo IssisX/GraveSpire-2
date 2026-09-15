@@ -1,3 +1,4 @@
+import { overDock, slingCompatible } from "../sim/geometry.ts";
 import type { Interactable } from "./level.ts";
 import type { Collider } from "./collision.ts";
 import type { WorldState } from "../sim/types.ts";
@@ -20,6 +21,9 @@ export type CtxCommit =
   | "release"
   | "recover"
   | "vent"
+  | "wedge"
+  | "reroute"
+  | "clear-sling"
   | "exit-operate"
   | "jump"
   | "mantle";
@@ -198,12 +202,11 @@ export function resolveContext(args: {
       dist: 0,
       priority: 40,
     });
-    const overDeck =
-      args.state.flags.payload_on_neck === false &&
-      !args.state.freight.payload_released &&
-      args.state.freight.lateral_m > 14 &&
-      args.state.freight.height_m < 4.2;
-    if ((args.operateId === "pendant" || args.operateId === "carrier") && overDeck) {
+    if (
+      (args.operateId === "pendant" || args.operateId === "carrier") &&
+      overDock(args.state.freight) &&
+      !args.state.freight.payload_released
+    ) {
       push({
         id: "release",
         verb: "Release",
@@ -366,7 +369,7 @@ export function resolveContext(args: {
         priority: 72,
       });
     } else if (it.id === "dock" || it.id === "carrier") {
-      if (!s.freight.payload_released && s.freight.lateral_m > 14 && s.freight.height_m < 4.6) {
+      if (!s.freight.payload_released && overDock(s.freight)) {
         push({
           id: "release",
           verb: "Release",
@@ -380,17 +383,58 @@ export function resolveContext(args: {
       }
     }
 
-    if (args.slingA && args.slingA !== it.id) {
+    if (it.id === "gate") {
       push({
-        id: `sling2:${it.id}`,
-        verb: "Attach to",
-        noun: it.label,
-        targetId: it.id,
-        kind: it.kind,
-        commit: "sling2",
+        id: "wedge:gate",
+        verb: s.gate.wedged ? "Pull" : "Set",
+        noun: "wedge",
+        targetId: "gate",
+        kind: "machine",
+        commit: "wedge",
         dist,
-        priority: 90,
+        priority: 52,
       });
+    }
+
+    if (it.id === "brk_west" && !s.electrical.chen_rerouted) {
+      push({
+        id: "reroute",
+        verb: "Close",
+        noun: "west bus",
+        targetId: "brk_west",
+        kind: "board",
+        commit: "reroute",
+        dist,
+        priority: 88,
+      });
+    }
+
+    if (s.cables.some((c) => c.id === "sling") && (it.id === "carrier" || it.id === "dock" || it.id === "frame" || it.kind === "member")) {
+      push({
+        id: "clear-sling",
+        verb: "Clear",
+        noun: "sling",
+        targetId: "sling",
+        kind: "world",
+        commit: "clear-sling",
+        dist,
+        priority: 58,
+      });
+    }
+
+    if (args.slingA && args.slingA !== it.id) {
+      if (slingCompatible(args.slingA, it.id)) {
+        push({
+          id: `sling2:${it.id}`,
+          verb: "Attach to",
+          noun: it.label,
+          targetId: it.id,
+          kind: it.kind,
+          commit: "sling2",
+          dist,
+          priority: 90,
+        });
+      }
     } else if (!args.slingA && (it.id === "carrier" || it.id === "dock" || it.id === "frame" || it.kind === "member")) {
       push({
         id: `sling:${it.id}`,
@@ -578,6 +622,20 @@ export function commitAction(action: CtxAction, bag: CommitBag): void {
       window.setTimeout(() => bag.sim.setCommand("GateVent", false), 4000);
       bag.flash("Venting gate inventory.");
       bag.audio.hiss();
+      return;
+    case "wedge":
+      bag.sim.setCommand("GateWedge", true);
+      bag.sim.setCommand("GateWedge", false);
+      bag.audio.clank();
+      return;
+    case "reroute":
+      bag.flash(bag.sim.act({ type: "chen_reroute" }));
+      bag.audio.clank();
+      return;
+    case "clear-sling":
+      bag.flash(bag.sim.act({ type: "clear_sling" }));
+      bag.setSlingA(null);
+      bag.audio.clank();
       return;
     case "jump":
       bag.jump();

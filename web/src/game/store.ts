@@ -33,6 +33,7 @@ export interface HudSnap {
   gateOpen: boolean;
   height_m: number;
   lateral_m: number;
+  dock: "in" | "close" | "offset";
 }
 
 export interface GameUI {
@@ -65,6 +66,7 @@ export interface GameUI {
   openingIndex: number;
   hint: string | null;
   hasSave: boolean;
+  mutter: string | null;
 }
 
 const empty: GameUI = {
@@ -97,6 +99,7 @@ const empty: GameUI = {
   openingIndex: 0,
   hint: null,
   hasSave: false,
+  mutter: null,
 };
 
 export const useGame = create<

@@ -32,6 +32,7 @@ export function PlayHud() {
           <span className="gs-look-d">{g.look.dist.toFixed(1)} m</span>
         </div>
       )}
+      {g.mutter && <div className="gs-mutter">{g.mutter}</div>}
 
       {g.warning && <div className="gs-warn-banner">{g.warning}</div>}
       {g.message && <div className="gs-toast">{g.message}</div>}
@@ -87,6 +88,10 @@ export function PlayHud() {
               <div>
                 <dt>Brake</dt>
                 <dd>{g.snap.brake ? "holding" : "open"}</dd>
+              </div>
+              <div>
+                <dt>Dock</dt>
+                <dd>{g.snap.dock === "in" ? "in envelope" : g.snap.dock === "close" ? "close" : "offset"}</dd>
               </div>
             </dl>
           )}

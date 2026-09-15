@@ -87,7 +87,9 @@ jobs:
             1. Tap the APK below.
             2. Allow install from GitHub if Android asks.
             3. Left thumb walks. Right side looks. One Action on what you can reach.
-            4. Machines expose Raise/Lower/Brake only while you stand at the pendant.
+            4. The hanging crate is not a remote. Walk to the pulpit pendant.
+            5. Raise, then traverse east to the painted receiving deck. Dock lamps go green in envelope.
+            6. Opening the process generator kills the hoist island and the bay sodium. People move.
 
             This is Act I as a WebView around the TypeScript/Three.js bay — not the Godot/C++ cell on main, not Unreal, not GDD §16 completeness.
           prerelease: true

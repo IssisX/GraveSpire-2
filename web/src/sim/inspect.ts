@@ -1,5 +1,6 @@
 import { DISTRICT_META, type DistrictId, type InspectReading, type WorldState } from "./types.ts";
 import { gallerySag, liveGalleryCount } from "./missions.ts";
+import { DOCK_LATERAL_M, dockEnvelope } from "./geometry.ts";
 
 function n(v: number, digits = 1): string {
   return v.toFixed(digits);
@@ -35,7 +36,8 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
           { label: "Height", value: n(f.height_m, 2), unit: "m", source: "measured", confidence: 0.97 },
           { label: "Traverse", value: n(f.lateral_m, 2), unit: "m", source: "measured", confidence: 0.97 },
           { label: "Brake", value: f.brake_engaged ? "holding" : "released", unit: "", source: "measured", confidence: 0.99 },
-          { label: "Offset from dock", value: n(Math.abs(f.lateral_m - 16), 2), unit: "m", source: "estimated", confidence: 0.8 },
+          { label: "Offset from dock", value: n(Math.abs(f.lateral_m - DOCK_LATERAL_M), 2), unit: "m", source: "estimated", confidence: 0.8 },
+          { label: "Envelope", value: dockEnvelope(f), unit: "", source: "estimated", confidence: 0.84 },
         ],
         warning: state.electrical.carrier_powered
           ? "Local command only. Looking at the hanging load from the west deck does not move it."
@@ -154,6 +156,8 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
         district: "FS08",
         lines: [
           { label: "Payload on deck", value: state.flags.payload_on_neck ? "yes" : "no", unit: "", source: "measured", confidence: 0.9 },
+          { label: "Envelope", value: dockEnvelope(f), unit: "", source: "estimated", confidence: 0.84 },
+          { label: "Offset", value: n(Math.abs(f.lateral_m - DOCK_LATERAL_M), 2), unit: "m", source: "estimated", confidence: 0.8 },
           { label: "Brake", value: f.brake_engaged ? "holding" : "released", unit: "", source: "measured", confidence: 0.99 },
           { label: "Alignment", value: n(Math.abs(g.seal_misalignment_m) * 1000, 1), unit: "mm", source: "estimated", confidence: 0.66 },
         ],

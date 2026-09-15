@@ -1,4 +1,14 @@
 import {
+  TRAVERSE_MAX_M,
+  TRAVERSE_MIN_M,
+  dockShare,
+  mechLateral,
+  overDock,
+  slingCompatible,
+  slingRestLength,
+} from "./geometry.ts";
+import { tickNpcs } from "./npcs.ts";
+import {
   AUTHORITY_DT,
   COMMANDS,
   G,
@@ -25,7 +35,6 @@ const kFrameDampingNsPm = 7.2e5;
 const kFrameTorsionNmPrad = 2.2e7;
 const kFrameTorsionDamping = 1.1e6;
 const kYieldDeflectionM = 0.055;
-const kFailureDeflectionM = 0.24;
 const kGateAreaM2 = 7.5;
 const kGateInertiaKgM2 = 9600.0;
 const kGateDriveTorqueNm = 6.8e5;
@@ -127,11 +136,11 @@ export class Simulation {
       }
       case "carrier_release": {
         if (s.freight.payload_released) return "Payload already released.";
-        const overDock =
-          s.freight.lateral_m > 4.15 &&
-          s.freight.height_m > 2.05 &&
-          s.freight.height_m < 2.7;
-        if (!overDock) return "Not over the neck deck.";
+        const docked = overDock(s.freight);
+        if (!docked && s.freight.height_m > 3.2 && Math.abs(s.freight.lateral_m - 16) > 3) {
+          return "Not over the neck deck.";
+        }
+        if (!docked) return "Not over the neck deck.";
         if (Math.abs(s.freight.vertical_velocity_mps) > 0.45) {
           s.freight.cargo_damaged = true;
           this.push("Release from height. Cargo took the hit.");
@@ -148,7 +157,7 @@ export class Simulation {
         ) {
           s.flags.payload_on_neck = true;
           this.push("Payload is on the neck deck. Brake is holding.");
-        } else if (overDock) {
+        } else {
           s.flags.payload_on_neck = true;
           this.push("Payload is on the deck. Alignment or brake is outside the declared dock.");
         }
@@ -204,15 +213,20 @@ export class Simulation {
         if (s.cables.some((c) => c.id === "sling")) {
           return "A working sling is already on. Clear it first.";
         }
+        if (!slingCompatible(action.a, action.b)) {
+          return "Those attachments are not a load path. Carrier, dock, frame, or a live member.";
+        }
+        const rest = slingRestLength(s, action.a, action.b);
+        if (rest == null) return "No geometry for that sling.";
         s.cables.push({
           id: "sling",
           a: action.a,
           b: action.b,
-          rest_length_m: 6.4,
+          rest_length_m: rest,
           tension_n: 0,
           slack: true,
         });
-        this.push(`Sling committed ${action.a} → ${action.b}. Tension-only.`);
+        this.push(`Sling committed ${action.a} → ${action.b}. Tension-only from this pose.`);
         return "Sling committed.";
       }
       case "clear_sling": {
@@ -271,7 +285,7 @@ export class Simulation {
     const power = elec.carrier_powered ? 1 : 0.12;
     const liftAccel = 1.35 * liftAxis * power;
     freight.vertical_velocity_mps += liftAccel * dt;
-    freight.lateral_velocity_mps += 1.1 * traverseAxis * power * dt;
+    freight.lateral_velocity_mps += 2.35 * traverseAxis * power * dt;
 
     if (freight.brake_engaged && liftAxis === 0) {
       const before = freight.vertical_velocity_mps;
@@ -284,7 +298,7 @@ export class Simulation {
     }
     freight.lateral_velocity_mps *= Math.exp(-1.8 * dt);
     freight.height_m = clamp(freight.height_m + freight.vertical_velocity_mps * dt, 0.45, 7.6);
-    freight.lateral_m = clamp(freight.lateral_m + freight.lateral_velocity_mps * dt, -5.8, 5.8);
+    freight.lateral_m = clamp(freight.lateral_m + freight.lateral_velocity_mps * dt, TRAVERSE_MIN_M, TRAVERSE_MAX_M);
     freight.payout_m = freight.height_m;
 
     const elasticLen = frame.deflection_m - frame.plastic_set_m;
@@ -335,11 +349,13 @@ export class Simulation {
     const carrierForce = freight.cable_tension_n;
     const gateForce = gate.pressure_pa * kGateAreaM2;
     const jackForce = this.active("FrameJack") ? -7.5e5 : 0.0;
-    const offsetFactor = 1 + 0.4 * Math.abs(freight.lateral_m);
+    const lever = mechLateral(freight.lateral_m);
+    const offsetFactor = 1 + 0.4 * Math.abs(lever);
+    const ontoNeck = dockShare(freight.lateral_m);
     const stiffness =
       kFrameBaseStiffnessNpm * (1.0 - 0.28 * frame.damage) + frame.brace_stiffness_npm;
     const frameForce =
-      0.42 * offsetFactor * carrierForce +
+      (0.42 + 0.28 * ontoNeck) * offsetFactor * carrierForce +
       0.09 * gateForce +
       jackForce -
       slingForce * 0.35 -
@@ -348,7 +364,7 @@ export class Simulation {
     frame.velocity_mps += (frameForce / kFrameMassKg) * dt;
     frame.deflection_m += frame.velocity_mps * dt;
 
-    const torsionMoment = carrierForce * freight.lateral_m + gateForce * 1.65;
+    const torsionMoment = carrierForce * lever + gateForce * 1.65;
     const torsionAccel =
       (torsionMoment - kFrameTorsionNmPrad * frame.twist_rad - kFrameTorsionDamping * frame.angular_velocity_radps) /
       8.5e6;
@@ -457,39 +473,24 @@ export class Simulation {
   private commitDock(): void {
     const f = this.state_.freight;
     if (this.state_.flags.payload_on_neck) return;
-    const over =
-      f.lateral_m > 4.2 &&
-      f.height_m > 2.1 &&
-      f.height_m < 2.55 &&
+    if (f.payload_released) return;
+    if (
+      overDock(f) &&
       f.brake_engaged &&
-      Math.abs(f.vertical_velocity_mps) < 0.12 &&
-      !f.payload_released;
-    if (over) {
+      Math.abs(f.vertical_velocity_mps) < 0.12
+    ) {
       this.state_.flags.payload_on_neck = true;
       this.push("Carrier is holding over the neck deck. Brake is real. Alignment is inside tolerance.");
     }
   }
 
   private updateNpcs(): void {
-    const walk = evaluateTraversal(this.state_);
-    const gallery = walk.find((e) => e.id === "gallery_span");
-    const skip = this.state_.npcs.find((n) => n.id === "skip");
-    if (skip) {
-      skip.stuck = gallery && !gallery.npc_safe ? gallery.reason : null;
-    }
-    const chen = this.state_.npcs.find((n) => n.id === "chen");
-    if (chen && inhabitantCanReachShop(this.state_) && this.state_.electrical.shop_powered) {
-      chen.x += (78.4 - chen.x) * 0.004;
-      chen.z += (3.1 - chen.z) * 0.004;
-      chen.district = chen.x > 64 ? "SHA" : "FS08";
-    }
-    const rami = this.state_.npcs.find((n) => n.id === "rami");
-    if (rami && this.state_.flags.payload_on_neck) {
-      rami.knows["docked"] = true;
-    }
+    tickNpcs(this.state_);
     void liveGalleryCount;
     void gallerySag;
     void neckWalkClear;
+    void inhabitantCanReachShop;
+    void evaluateTraversal;
   }
 
   private breaker(id: string) {

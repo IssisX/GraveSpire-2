@@ -118,4 +118,55 @@ describe("Act I reductions", () => {
     sim.act({ type: "carrier_release" });
     assert.equal(sim.state().flags.payload_on_neck, false);
   });
+
+  it("gantry traverse reaches the receiving deck", () => {
+    const sim = new Simulation();
+    sim.setCommand("CarrierRight", true);
+    runTicks(sim, 420);
+    sim.setCommand("CarrierRight", false);
+    assert.ok(sim.state().freight.lateral_m > 12, "trolley must be able to travel onto the east apron");
+  });
+
+  it("opening the process generator kills the carrier island", () => {
+    const sim = new Simulation();
+    runTicks(sim, 8);
+    assert.equal(sim.state().electrical.carrier_powered, true);
+    sim.act({ type: "toggle_breaker", id: "brk_gen" });
+    runTicks(sim, 4);
+    assert.equal(sim.state().electrical.carrier_powered, false);
+    assert.equal(sim.state().electrical.bay_lights, false);
+    assert.equal(sim.state().electrical.process_isolated, true);
+  });
+
+  it("west bus refuses to close onto a live cooking feed", () => {
+    const sim = new Simulation();
+    const msg = sim.act({ type: "chen_reroute" });
+    assert.match(msg, /Isolate/);
+    assert.equal(sim.state().electrical.chen_rerouted, false);
+    sim.act({ type: "toggle_breaker", id: "brk_gen" });
+    const ok = sim.act({ type: "chen_reroute" });
+    assert.match(ok, /West bus/);
+    assert.equal(sim.state().electrical.chen_rerouted, true);
+  });
+
+  it("incompatible sling is rejected; carrier-to-dock is a load path", () => {
+    const sim = new Simulation();
+    const bad = sim.act({ type: "sling", a: "carrier", b: "carrier" });
+    assert.match(bad, /not a load path|already/);
+    const ok = sim.act({ type: "sling", a: "carrier", b: "dock" });
+    assert.equal(ok, "Sling committed.");
+    assert.equal(sim.state().cables[0]?.a, "carrier");
+    assert.ok((sim.state().cables[0]?.rest_length_m ?? 0) > 1);
+  });
+
+  it("holding over the receiving deck with brake docks the live load", () => {
+    const sim = new Simulation();
+    const s = sim.state();
+    s.freight.lateral_m = 16;
+    s.freight.height_m = 4.48;
+    s.freight.vertical_velocity_mps = 0;
+    s.freight.brake_engaged = true;
+    runTicks(sim, 6);
+    assert.equal(sim.state().flags.payload_on_neck, true);
+  });
 });
