@@ -21,8 +21,9 @@ export const CHAIN = {
   entryRockerArmM: 0.62,
   // Light trip linkage: MC-01 must trigger the next mechanism, not power it.
   entryContactBaseY: 2.40,
-  entryPawlClearM: 0.12,
-  entryPawlEscapeM: 0.12,
+  // A pawl only needs to clear its tooth/face, not travel like an actuator.
+  entryPawlClearM: 0.10,
+  entryPawlEscapeM: 0.08,
   bridgeReleaseContactM: 13.05,
   bridgeReleaseArmM: 0.55,
   bridgePawlClearM: 0.18,
@@ -40,7 +41,7 @@ function createNetwork(): MechanicalNetworkState {
     dofs: [
       { id: "entry_rocker", kind: "rotary", q: 0, v: 0, inertia_si: 200, damping_si: 120, min_q: 0, max_q: 0.78, stop_restitution: 0 },
       { id: "entry_pawl", kind: "linear", q: 0, v: 0, inertia_si: 85, damping_si: 500, min_q: 0, max_q: 0.40, stop_restitution: 0 },
-      { id: "transfer_carriage", kind: "linear", q: 0, v: 0, inertia_si: CHAIN.carriageMassKg, damping_si: 7000, min_q: 0, max_q: CHAIN.carriageTravelM, stop_restitution: 0.03 },
+      { id: "transfer_carriage", kind: "linear", q: 0, v: 0, inertia_si: CHAIN.carriageMassKg, damping_si: 5500, min_q: 0, max_q: CHAIN.carriageTravelM, stop_restitution: 0.03 },
       { id: "transfer_counterweight", kind: "linear", q: 0, v: 0, inertia_si: CHAIN.counterweightMassKg, damping_si: 900, min_q: 0, max_q: CHAIN.carriageTravelM, stop_restitution: 0 },
       { id: "bridge_release", kind: "rotary", q: 0, v: 0, inertia_si: 5000, damping_si: 2800, min_q: 0, max_q: 0.82, stop_restitution: 0 },
       { id: "bridge_pawl", kind: "linear", q: 0, v: 0, inertia_si: 90, damping_si: 500, min_q: 0, max_q: 0.36, stop_restitution: 0 },
@@ -133,8 +134,9 @@ export function linkedEntryContactForce(rube: RubeState): number {
   if (penetration <= 0) return 0;
   const rockerPointVelocity = CHAIN.entryRockerArmM * Math.cos(rocker.q) * rocker.v;
   const closingVelocity = rube.lift.velocity_mps - rockerPointVelocity;
-  // Low-force trip linkage. Reciprocal reaction still pushes back on MC-01's lift.
-  return Math.max(0, 12000 * penetration + 1000 * Math.max(0, closingVelocity));
+  // The release is a trip, not a power transfer. Cap the reciprocal load so MC-01
+  // can move the rocker without the rocker becoming a second hidden lift brake.
+  return Math.min(900, Math.max(0, 12000 * penetration + 1000 * Math.max(0, closingVelocity)));
 }
 
 function updateEnergy(chain: LinkedCascadeState): void {
@@ -173,7 +175,8 @@ export function stepLinkedCascade(rube: RubeState, dt: number, entryContactN: nu
   addGeneralizedForce(forces, "entry_pawl", -300 * pawl.q);
   addGeneralizedForce(forces, "transfer_counterweight", CHAIN.counterweightMassKg * G);
   if (Math.abs(carriage.v) > 0.02) {
-    addGeneralizedForce(forces, "transfer_carriage", -0.015 * CHAIN.carriageMassKg * G * Math.sign(carriage.v));
+    // Rail-car scale rolling resistance, not dry sliding friction.
+    addGeneralizedForce(forces, "transfer_carriage", -0.010 * CHAIN.carriageMassKg * G * Math.sign(carriage.v));
   }
 
   const releaseBoundary = CHAIN.bridgeReleaseContactM + CHAIN.bridgeReleaseArmM * Math.sin(release.q);
