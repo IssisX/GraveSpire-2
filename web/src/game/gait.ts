@@ -52,8 +52,8 @@ export function stepGait(
     crouch: boolean;
     sprint: boolean;
     forwardAccel: number;
-    lateralAccel: number;
-    lateralSpeed: number;
+    lateralAccel?: number;
+    lateralSpeed?: number;
     yawRate: number;
     landed: number;
   },
@@ -63,6 +63,8 @@ export function stepGait(
   g.foot = false;
   const reduced = settings.reducedMotion;
   const shakeK = reduced ? 0 : settings.shake;
+  const lateralAccel = sample.lateralAccel ?? 0;
+  const lateralSpeed = sample.lateralSpeed ?? 0;
 
   // Full gait-cycle distance, so cadence emerges from actual traveled speed.
   const stride = sample.sprint ? 2.35 : sample.crouch ? 1.18 : 1.62;
@@ -82,10 +84,9 @@ export function stepGait(
   const stepAmp = reduced ? 0 : sample.crouch ? 0.006 : sample.sprint ? 0.024 : 0.015;
   const stepWidth = reduced ? 0 : sample.crouch ? 0.010 : sample.sprint ? 0.018 : 0.014;
 
-  // COM rises twice per gait cycle while the pelvis shifts over each planted foot.
   const wantV = sample.grounded ? -Math.cos(g.phase * 2) * stepAmp * speedK : 0;
   const accelFore = Math.max(-5.5, Math.min(5.5, sample.forwardAccel));
-  const accelLat = Math.max(-6.0, Math.min(6.0, sample.lateralAccel));
+  const accelLat = Math.max(-6.0, Math.min(6.0, lateralAccel));
   const wantL = sample.grounded
     ? Math.sin(g.phase) * stepWidth * speedK - accelLat * (reduced ? 0.0004 : 0.0017)
     : 0;
@@ -93,9 +94,8 @@ export function stepGait(
     ? Math.sin(g.phase * 2 + Math.PI * 0.5) * stepAmp * 0.24 * speedK
     : 0;
 
-  // Athletic turns and cuts show up as body lean, not camera-only yaw snapping.
   const turnLean = Math.max(-1.4, Math.min(1.4, sample.yawRate));
-  const strafeLean = Math.max(-3.0, Math.min(3.0, sample.lateralSpeed));
+  const strafeLean = Math.max(-3.0, Math.min(3.0, lateralSpeed));
   const wantRoll = reduced
     ? 0
     : -Math.sin(g.phase) * 0.009 * speedK + turnLean * 0.028 - accelLat * 0.0030 - strafeLean * 0.004;
