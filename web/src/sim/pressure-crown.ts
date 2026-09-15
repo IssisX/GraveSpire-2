@@ -1,11 +1,17 @@
 import { G, clamp, type LinkedCascadeState, type MechanicalDofState } from "./types.ts";
 import { addGeneralizedForce, mechDof, type GeneralizedForces } from "./mechanical-network.ts";
 import { MECH_ID } from "./mechanical-ids.ts";
+import {
+  applySkySpineForces,
+  enforceSkySpineConstraints,
+  ensureSkySpineState,
+  skySpineFinite,
+} from "./sky-spine.ts";
 
 /**
  * MC-09/10 continue the same shared generalized-coordinate network.
- * MC-09 adds pressure-volume work; MC-10 adds rotational inertia, centrifugal
- * governor motion and a mechanically linked traversable bridge.
+ * MC-09 adds pressure-volume work; MC-10 converts rack work into true angular
+ * momentum through a one-way clutch, then governor motion extends the route.
  */
 export const PRESSURE_CROWN = {
   z: -36.0,
@@ -18,25 +24,27 @@ export const PRESSURE_CROWN = {
   pistonAreaM2: 0.16,
   gasVolume0M3: 18.0,
   gasPressure0Pa: 7.0e6,
+  ambientPressurePa: 101325.0,
   gasGamma: 1.4,
   ramDampingNsPm: 1.5e4,
   valveTravelM: 0.28,
-  valveClearM: 0.11,
-  valveFollowerGain: 0.34,
-  valveFollowerStartM: 16.6,
-  valveK: 1.2e5,
-  valveC: 7.0e3,
+  valveClearM: 0.08,
+  valveOverCenterM: 0.075,
+  valveFollowerGain: 0.50,
+  valveFollowerStartM: 15.5,
+  valveK: 1.5e5,
+  valveC: 8.5e3,
+  valveDetentK: 4.2e4,
 
   // MC-10 — centrifugal crown.
   crownX: 229.0,
   crownY: 91.0,
   flywheelBaseInertiaKgm2: 1.0e7,
-  flywheelDampingNms: 1.1e5,
-  flywheelMaxRad: 9.0,
-  rackEngageM: 17.4,
+  flywheelDampingNms: 7.0e4,
+  rackEngageM: 16.8,
   rackRatioRadPerM: 1.85,
-  rackKnmPrad: 2.8e6,
-  rackCnmSPrad: 2.0e5,
+  rackClutchNms: 2.8e6,
+  rackMaxTorqueNm: 6.5e6,
   governorCount: 4,
   governorMassEachKg: 4200.0,
   governorBaseRadiusM: 3.1,
@@ -87,9 +95,9 @@ export function ensurePressureCrownState(chain: LinkedCascadeState): void {
       PRESSURE_CROWN.flywheelBaseInertiaKgm2 +
       PRESSURE_CROWN.governorCount * PRESSURE_CROWN.governorMassEachKg * PRESSURE_CROWN.governorBaseRadiusM ** 2,
     damping_si: PRESSURE_CROWN.flywheelDampingNms,
-    min_q: 0,
-    max_q: PRESSURE_CROWN.flywheelMaxRad,
-    stop_restitution: 0.02,
+    min_q: -1.0e9,
+    max_q: 1.0e9,
+    stop_restitution: 0,
   });
   addDof(chain, {
     id: MECH_ID.mc10Governor,
@@ -113,6 +121,7 @@ export function ensurePressureCrownState(chain: LinkedCascadeState): void {
     max_q: PRESSURE_CROWN.bridgeTravelM,
     stop_restitution: 0.02,
   });
+  ensureSkySpineState(chain);
 }
 
 export function gasPressurePa(chain: LinkedCascadeState): number {
@@ -132,7 +141,7 @@ export function applyPressureCrownForces(chain: LinkedCascadeState, forces: Gene
   const governor = mechDof(chain.network, MECH_ID.mc10Governor);
   const bridge = mechDof(chain.network, MECH_ID.mc10Bridge);
 
-  // MC-08 -> MC-09: the arriving helical platform physically strokes the valve.
+  // MC-08 -> MC-09: arriving helix physically strokes the pressure spool.
   const valveTarget = clamp(
     (helix.q - PRESSURE_CROWN.valveFollowerStartM) * PRESSURE_CROWN.valveFollowerGain,
     0,
@@ -145,45 +154,36 @@ export function applyPressureCrownForces(chain: LinkedCascadeState, forces: Gene
     PRESSURE_CROWN.valveK * (valveTarget - valve.q) +
     PRESSURE_CROWN.valveC * (valveTargetV - valve.v);
   addGeneralizedForce(forces, MECH_ID.mc09Valve, valveForce);
-  if (valveForce > 0) {
-    addGeneralizedForce(forces, MECH_ID.mc08Helix, -valveForce * PRESSURE_CROWN.valveFollowerGain);
-  }
+  if (valveForce > 0) addGeneralizedForce(forces, MECH_ID.mc08Helix, -valveForce * PRESSURE_CROWN.valveFollowerGain);
 
-  // Pressure-volume work against the 80 t ram. The blocked valve is enforced
-  // as a real kinematic restraint after integration, not a fake timer.
+  // Real over-center detent: once the spool crosses center, spring geometry keeps it open.
+  const detentTarget = valve.q >= PRESSURE_CROWN.valveOverCenterM ? PRESSURE_CROWN.valveTravelM : 0;
+  addGeneralizedForce(forces, MECH_ID.mc09Valve, PRESSURE_CROWN.valveDetentK * (detentTarget - valve.q));
+
   const pressure = gasPressurePa(chain);
   const pressureForce = Math.max(0, pressure - PRESSURE_CROWN.ambientPressurePa) * PRESSURE_CROWN.pistonAreaM2;
   addGeneralizedForce(forces, MECH_ID.mc09Ram, pressureForce - PRESSURE_CROWN.ramMassKg * G);
 
-  // MC-09 -> MC-10: ram-mounted rack spins the same flywheel whose centrifugal
-  // state drives the bridge. Equal/opposite rack force loads the ram.
-  const rackTarget = clamp(
-    (ram.q - PRESSURE_CROWN.rackEngageM) * PRESSURE_CROWN.rackRatioRadPerM,
-    0,
-    PRESSURE_CROWN.flywheelMaxRad,
-  );
-  const rackTargetV = ram.q > PRESSURE_CROWN.rackEngageM
-    ? ram.v * PRESSURE_CROWN.rackRatioRadPerM
-    : 0;
-  const rackTorque =
-    PRESSURE_CROWN.rackKnmPrad * (rackTarget - flywheel.q) +
-    PRESSURE_CROWN.rackCnmSPrad * (rackTargetV - flywheel.v);
-  addGeneralizedForce(forces, MECH_ID.mc10Flywheel, rackTorque);
-  if (ram.q > PRESSURE_CROWN.rackEngageM && rackTorque > 0) {
-    addGeneralizedForce(forces, MECH_ID.mc09Ram, -rackTorque * PRESSURE_CROWN.rackRatioRadPerM);
+  // MC-09 -> MC-10: a one-way rack clutch transfers velocity/power, not angle position.
+  if (ram.q > PRESSURE_CROWN.rackEngageM && ram.v > 0) {
+    const drivenOmega = PRESSURE_CROWN.rackRatioRadPerM * ram.v;
+    const slip = drivenOmega - flywheel.v;
+    if (slip > 0) {
+      const rackTorque = Math.min(PRESSURE_CROWN.rackMaxTorqueNm, PRESSURE_CROWN.rackClutchNms * slip);
+      addGeneralizedForce(forces, MECH_ID.mc10Flywheel, rackTorque);
+      addGeneralizedForce(forces, MECH_ID.mc09Ram, -rackTorque * PRESSURE_CROWN.rackRatioRadPerM);
+    }
   }
 
-  // Governor: outward centrifugal demand comes from actual angular velocity.
+  // Governor responds to actual angular velocity of the free-spinning flywheel.
   const radius = PRESSURE_CROWN.governorBaseRadiusM + governor.q;
   const centrifugal =
     PRESSURE_CROWN.governorCount * PRESSURE_CROWN.governorMassEachKg * radius * flywheel.v * flywheel.v;
-  const spring = PRESSURE_CROWN.governorSpringK * governor.q;
-  addGeneralizedForce(forces, MECH_ID.mc10Governor, centrifugal - spring);
+  addGeneralizedForce(forces, MECH_ID.mc10Governor, centrifugal - PRESSURE_CROWN.governorSpringK * governor.q);
   flywheel.inertia_si =
     PRESSURE_CROWN.flywheelBaseInertiaKgm2 +
     PRESSURE_CROWN.governorCount * PRESSURE_CROWN.governorMassEachKg * radius * radius;
 
-  // Governor linkage extends the bridge; slowing the rotor lets it retract.
   const bridgeTarget = clamp(
     (governor.q - PRESSURE_CROWN.bridgeThresholdM) * PRESSURE_CROWN.bridgeGain,
     0,
@@ -197,6 +197,8 @@ export function applyPressureCrownForces(chain: LinkedCascadeState, forces: Gene
     PRESSURE_CROWN.bridgeLinkC * (bridgeTargetV - bridge.v);
   addGeneralizedForce(forces, MECH_ID.mc10Bridge, linkForce);
   addGeneralizedForce(forces, MECH_ID.mc10Governor, -linkForce * PRESSURE_CROWN.bridgeGain);
+
+  applySkySpineForces(chain, forces);
 }
 
 export function enforcePressureCrownConstraints(chain: LinkedCascadeState): void {
@@ -207,6 +209,7 @@ export function enforcePressureCrownConstraints(chain: LinkedCascadeState): void
     ram.q = 0;
     if (ram.v > 0) ram.v = 0;
   }
+  enforceSkySpineConstraints(chain);
 }
 
 export function pressureCrownFinite(chain: LinkedCascadeState): boolean {
@@ -215,7 +218,7 @@ export function pressureCrownFinite(chain: LinkedCascadeState): boolean {
   return ids.every((id) => {
     const d = mechDof(chain.network, id);
     return Number.isFinite(d.q) && Number.isFinite(d.v) && Number.isFinite(d.inertia_si);
-  }) && Number.isFinite(gasPressurePa(chain));
+  }) && Number.isFinite(gasPressurePa(chain)) && skySpineFinite(chain);
 }
 
 export function mc09World(chain: LinkedCascadeState) {
