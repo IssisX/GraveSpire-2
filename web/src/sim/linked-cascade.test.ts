@@ -59,16 +59,16 @@ describe("MC-01 to MC-02 to MC-03 causal chain", () => {
     assert.equal(mechDof(chain.network, "transfer_carriage").q, 0);
   });
 
-  it("lift contact retracts the pawl through force, rocker rotation, and cable tension", () => {
+  it("lift contact rotates the rocker and lets the counterweight physically escape the pawl", () => {
     const r = createRubeState();
     r.lift.y_m = 2.5;
     r.lift.velocity_mps = 0;
     runLinked(r, 480);
     const chain = ensureLinkedCascadeState(r);
-    assert.ok(chain.entry_contact_n > 0);
-    assert.ok(mechDof(chain.network, "entry_rocker").q > 0.08, "lift contact must physically rotate the low-force release rocker");
-    assert.ok(mechCable(chain.network, "entry_pawl_cable").tension_n > 0);
+    assert.ok(mechDof(chain.network, "entry_rocker").q > CHAIN.entryPawlClearM);
     assert.ok(mechDof(chain.network, "entry_pawl").q > CHAIN.entryPawlClearM);
+    assert.ok(mechDof(chain.network, "transfer_counterweight").q > CHAIN.entryPawlEscapeM);
+    assert.equal(chain.entry_pawl_reaction_n, 0);
   });
 
   it("released brake lets gravity haul the carriage and carriage contact releases the gravity bridge", () => {
