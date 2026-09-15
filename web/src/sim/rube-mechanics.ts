@@ -13,13 +13,22 @@ import {
   type GeneralizedForces,
 } from "./mechanical-network.ts";
 import { MECH_ID } from "./mechanical-ids.ts";
+import {
+  ZERO_UPPER_CONTROLS,
+  applyUpperCascadeForces,
+  captureUpperStep,
+  enforceUpperCascadeConstraints,
+  ensureUpperCascadeState,
+  upperCascadeFinite,
+  type UpperControls,
+} from "./upper-cascade.ts";
 
 export { toggleTransferBrake } from "./linked-cascade.ts";
 
 /**
  * MC-01 geometry/parameters. Dynamic truth is NOT stored here or in the legacy
- * rube.lever/ballast/lift/rope snapshots. MC-01 through MC-04 all live in the
- * same MechanicalNetworkState under rube.chain.network.
+ * rube.lever/ballast/lift/rope snapshots. MC-01 onward lives in the same
+ * MechanicalNetworkState under rube.chain.network.
  */
 export const CASCADE = {
   z: -31.5,
@@ -162,6 +171,7 @@ export function ensureMc01Network(rube: RubeState): void {
     });
   }
   updateMc01CableGeometry(rube);
+  ensureUpperCascadeState(chain);
 }
 
 function updateMc01CableGeometry(rube: RubeState): void {
@@ -176,8 +186,6 @@ function updateMc01CableGeometry(rube: RubeState): void {
     { dof_id: MECH_ID.mc01Lever, gradient_m_per_q: g.dLenDLever },
     { dof_id: MECH_ID.mc01Lift, gradient_m_per_q: g.dLenDLift },
   ];
-  // Local linearization exactly matches the nonlinear routed length at the
-  // current configuration while preserving the correct Jacobian dL/dq.
   cable.base_length_m = g.length - g.dLenDLever * lever.q - g.dLenDLift * lift.q;
   cable.length_m = g.length;
 }
@@ -195,15 +203,12 @@ function syncLegacyProjection(rube: RubeState, solvedForces: GeneralizedForces =
   rube.lever.mass_kg = CASCADE.leverMassKg;
   rube.lever.inertia_kgm2 = leverBaseInertia();
   rube.lever.net_torque_nm = solvedForces[MECH_ID.mc01Lever] ?? rube.lever.net_torque_nm ?? 0;
-
   rube.ballast.mass_kg = CASCADE.ballastMassKg;
   rube.ballast.s_m = ballast.q;
   rube.ballast.velocity_mps = ballast.v;
-
   rube.lift.mass_kg = CASCADE.liftMassKg;
   rube.lift.y_m = lift.q;
   rube.lift.velocity_mps = lift.v;
-
   rube.rope.rest_length_m = rope.rest_length_m;
   rube.rope.length_m = rope.length_m;
   rube.rope.tension_n = rope.tension_n;
@@ -251,7 +256,6 @@ export function ropeGeometry(rube: RubeState) {
 
 export function createRubeState(): RubeState {
   const base: RubeState = {
-    // Compatibility/read-model snapshots. Shared network is authoritative.
     lever: {
       angle_rad: 0,
       omega_radps: 0,
@@ -325,10 +329,7 @@ function applyMc01Forces(rube: RubeState, forces: GeneralizedForces): void {
   const lever = mechDof(net, MECH_ID.mc01Lever);
   const ballast = mechDof(net, MECH_ID.mc01Ballast);
   const lift = mechDof(net, MECH_ID.mc01Lift);
-
-  // Ballast mass distribution changes the same lever DOF's inertia.
   lever.inertia_si = leverBaseInertia() + CASCADE.ballastMassKg * sq(ballast.q);
-
   const normal = CASCADE.ballastMassKg * G * Math.max(0.1, Math.cos(lever.q));
   const gravityAlong = -CASCADE.ballastMassKg * G * Math.sin(lever.q);
   const staticLimit = CASCADE.sliderMuStatic * normal;
@@ -341,24 +342,23 @@ function applyMc01Forces(rube: RubeState, forces: GeneralizedForces): void {
     sliderForce -= oppose * CASCADE.sliderMuKinetic * normal;
   }
   addGeneralizedForce(forces, MECH_ID.mc01Ballast, sliderForce);
-
-  // Weight acting at the trolley's actual moment arm drives the shared lever DOF.
-  addGeneralizedForce(
-    forces,
-    MECH_ID.mc01Lever,
-    -CASCADE.ballastMassKg * G * ballast.q * Math.cos(lever.q),
-  );
+  addGeneralizedForce(forces, MECH_ID.mc01Lever, -CASCADE.ballastMassKg * G * ballast.q * Math.cos(lever.q));
   addGeneralizedForce(forces, MECH_ID.mc01Lift, -CASCADE.liftMassKg * G);
-
-  // Damping and routed-cable reactions are supplied by the shared network solver.
   void lift;
 }
 
-export function stepRubeMechanics(rube: RubeState, dt: number): void {
+export function stepRubeMechanics(
+  rube: RubeState,
+  dt: number,
+  upperControls: UpperControls = ZERO_UPPER_CONTROLS,
+): void {
   ensureMc01Network(rube);
   const external: GeneralizedForces = {};
   applyMc01Forces(rube, external);
+  const beforeUpper = captureUpperStep(ensureLinkedCascadeState(rube));
+  applyUpperCascadeForces(rube, upperControls, external);
   const solved = stepLinkedCascade(rube, dt, external);
+  enforceUpperCascadeConstraints(rube, beforeUpper);
   updateMc01CableGeometry(rube);
   syncLegacyProjection(rube, solved);
 }
@@ -366,7 +366,7 @@ export function stepRubeMechanics(rube: RubeState, dt: number): void {
 export function rubeFinite(rube: RubeState): boolean {
   ensureMc01Network(rube);
   syncLegacyProjection(rube);
-  return linkedCascadeFinite(rube) && [
+  return linkedCascadeFinite(rube) && upperCascadeFinite(rube) && [
     rube.lever.angle_rad,
     rube.lever.omega_radps,
     rube.lever.net_torque_nm,
