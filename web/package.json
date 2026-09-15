@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
-    "test": "node --test --experimental-strip-types src/sim/*.test.ts",
+    "test": "node --test --experimental-strip-types src/sim/*.test.ts src/game/*.test.ts",
     "build": "vite build",
     "preview": "vite preview"
   },
