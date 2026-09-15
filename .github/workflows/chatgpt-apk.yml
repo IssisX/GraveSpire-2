@@ -1,0 +1,100 @@
+name: chatgpt-android-apk
+
+on:
+  push:
+    branches: [ChatGPT]
+  workflow_dispatch:
+
+concurrency:
+  group: android-apk-chatgpt
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  apk:
+    name: Test, build, and assemble ChatGPT debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Test reduced web mechanics
+        working-directory: web
+        run: |
+          npm ci
+          npm test
+
+      - name: Build Act I web
+        working-directory: web
+        run: npm run build
+
+      - name: Stage web into Android assets
+        run: |
+          rm -rf android/app/src/main/assets/www
+          mkdir -p android/app/src/main/assets/www
+          cp -a web/dist/. android/app/src/main/assets/www/
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK packages
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "sdk.dir=$SDK" > android/local.properties
+          SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager "$SDK"/cmdline-tools/latest/bin/sdkmanager 2>/dev/null | tail -1)
+          echo "sdkmanager=$SM sdk=$SDK"
+          yes | "$SM" --licenses >/dev/null || true
+          "$SM" "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Assemble debug APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon
+
+      - name: Name APK
+        run: |
+          mkdir -p dist-apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist-apk/gravespire-chatgpt-debug.apk
+          ls -lh dist-apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gravespire-chatgpt-debug
+          path: dist-apk/gravespire-chatgpt-debug.apk
+          if-no-files-found: error
+
+      - name: Publish ChatGPT branch prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: chatgpt-act1-apk
+          name: GRAVESPIRE ChatGPT — debug APK
+          body: |
+            Debug APK built from the ChatGPT branch.
+
+            This branch contains the complete inherited Grok Act I state plus the MC-01 Mechanical Cascade extension. Bay 07 remains the opening authority; the Transfer Neck now leads physically into the first lever / ballast / routed-rope / lift machine cell.
+
+            The MC-01 cell is explicitly a reduced planar multibody model, not a claim of final GDD 6-DOF contact or nonlinear structural completeness.
+          prerelease: true
+          make_latest: false
+          files: dist-apk/gravespire-chatgpt-debug.apk
+          target_commitish: ChatGPT
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
