@@ -37,6 +37,11 @@ export const MECH_ID = {
   mc08Ring: "mc08_ring",
   mc08Ballast: "mc08_ballast",
   mc08Helix: "mc08_helix",
+  mc09Valve: "mc09_valve",
+  mc09Ram: "mc09_ram",
+  mc10Flywheel: "mc10_flywheel",
+  mc10Governor: "mc10_governor",
+  mc10Bridge: "mc10_bridge",
 } as const;
 
 export type MechanicalId = (typeof MECH_ID)[keyof typeof MECH_ID];
