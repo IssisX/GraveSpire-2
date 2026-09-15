@@ -19,8 +19,9 @@ export const CHAIN = {
   counterweightStartY: 9.0,
   transferBrakeCapacityN: 45000.0,
   entryRockerArmM: 0.62,
-  entryContactBaseY: 2.28,
-  entryPawlClearM: 0.18,
+  // Light trip linkage: MC-01 must trigger the next mechanism, not power it.
+  entryContactBaseY: 2.40,
+  entryPawlClearM: 0.12,
   entryPawlEscapeM: 0.12,
   bridgeReleaseContactM: 13.05,
   bridgeReleaseArmM: 0.55,
@@ -37,7 +38,7 @@ function createNetwork(): MechanicalNetworkState {
   const bridgeI = (CHAIN.bridgeMassKg * CHAIN.bridgeLengthM * CHAIN.bridgeLengthM) / 3;
   return {
     dofs: [
-      { id: "entry_rocker", kind: "rotary", q: 0, v: 0, inertia_si: 6000, damping_si: 2800, min_q: 0, max_q: 0.78, stop_restitution: 0 },
+      { id: "entry_rocker", kind: "rotary", q: 0, v: 0, inertia_si: 200, damping_si: 120, min_q: 0, max_q: 0.78, stop_restitution: 0 },
       { id: "entry_pawl", kind: "linear", q: 0, v: 0, inertia_si: 85, damping_si: 500, min_q: 0, max_q: 0.40, stop_restitution: 0 },
       { id: "transfer_carriage", kind: "linear", q: 0, v: 0, inertia_si: CHAIN.carriageMassKg, damping_si: 7000, min_q: 0, max_q: CHAIN.carriageTravelM, stop_restitution: 0.03 },
       { id: "transfer_counterweight", kind: "linear", q: 0, v: 0, inertia_si: CHAIN.counterweightMassKg, damping_si: 900, min_q: 0, max_q: CHAIN.carriageTravelM, stop_restitution: 0 },
@@ -51,12 +52,14 @@ function createNetwork(): MechanicalNetworkState {
         base_length_m: 2,
         rest_length_m: 2,
         length_m: 2,
-        stiffness_npm: 75000,
-        damping_ns_pm: 10000,
+        stiffness_npm: 30000,
+        damping_ns_pm: 2500,
         tension_n: 0,
         slack: true,
         terms: [
-          { dof_id: "entry_rocker", gradient_m_per_q: 0.42 },
+          // One radian of rocker rotation pays out/retracts one metre of this reduced linkage.
+          // This travel ratio lets a low-force trip release the pawl without stealing lift power.
+          { dof_id: "entry_rocker", gradient_m_per_q: 1.0 },
           { dof_id: "entry_pawl", gradient_m_per_q: -1 },
         ],
       },
@@ -130,7 +133,8 @@ export function linkedEntryContactForce(rube: RubeState): number {
   if (penetration <= 0) return 0;
   const rockerPointVelocity = CHAIN.entryRockerArmM * Math.cos(rocker.q) * rocker.v;
   const closingVelocity = rube.lift.velocity_mps - rockerPointVelocity;
-  return Math.max(0, 380000 * penetration + 18000 * Math.max(0, closingVelocity));
+  // Low-force trip linkage. Reciprocal reaction still pushes back on MC-01's lift.
+  return Math.max(0, 12000 * penetration + 1000 * Math.max(0, closingVelocity));
 }
 
 function updateEnergy(chain: LinkedCascadeState): void {
@@ -165,7 +169,8 @@ export function stepLinkedCascade(rube: RubeState, dt: number, entryContactN: nu
 
   const forces: GeneralizedForces = {};
   addGeneralizedForce(forces, "entry_rocker", entryContactN * CHAIN.entryRockerArmM);
-  addGeneralizedForce(forces, "entry_pawl", -14000 * pawl.q);
+  // Light pawl return spring; the rocker/cable geometry supplies travel, not brute force.
+  addGeneralizedForce(forces, "entry_pawl", -300 * pawl.q);
   addGeneralizedForce(forces, "transfer_counterweight", CHAIN.counterweightMassKg * G);
   if (Math.abs(carriage.v) > 0.02) {
     addGeneralizedForce(forces, "transfer_carriage", -0.015 * CHAIN.carriageMassKg * G * Math.sign(carriage.v));
