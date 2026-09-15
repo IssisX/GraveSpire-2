@@ -53,7 +53,7 @@ export function createInitialState(): WorldState {
     { id: "brk_gate", name: "Gate motor feed", closed: true, tripped: false, load_a: 0, rating_a: 90, thermal: 0 },
     { id: "brk_hab", name: "Hab feed via drive", closed: true, tripped: false, load_a: 0, rating_a: 80, thermal: 0 },
     { id: "brk_shop", name: "Circ Shop local", closed: false, tripped: false, load_a: 0, rating_a: 60, thermal: 0 },
-    { id: "brk_west", name: "West bus (reroute)", closed: false, tripped: false, load_a: 0, rating_a: 80, thermal: 0 },
+    { id: "brk_west", name: "West bus (reroute)", closed: false, tripped: false, load_a: 0, rating_a: 125, thermal: 0 },
   ];
 
   const npcs: NpcState[] = [
@@ -62,7 +62,8 @@ export function createInitialState(): WorldState {
       name: "Rami Okonkwo",
       role: "Crane lead",
       x: 4.6,
-      y: 1.15,
+      // Pulpit deck top is 1.28 m; the capsule's feet sit 0.33 m above origin.
+      y: 0.95,
       z: -7.4,
       yaw: 0.6,
       district: "FS07",
@@ -164,6 +165,9 @@ export function createInitialState(): WorldState {
       payout_m: 2.2,
       payload_released: false,
       cargo_damaged: false,
+      payload_swing_rad: 0,
+      payload_swing_velocity_radps: 0,
+      hoist_current_a: 0,
     },
     frame: {
       deflection_m: 0,
@@ -182,11 +186,13 @@ export function createInitialState(): WorldState {
       inventory_kg: 310,
       seal_misalignment_m: 0,
       wedged: false,
+      vent_open: false,
     },
     members,
     cables: [],
     electrical: {
       breakers,
+      process_load_a: 0,
       shop_powered: false,
       bay_lights: true,
       drive_powered: true,

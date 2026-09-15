@@ -1,6 +1,6 @@
 /** Declared Act I reduction. Not GDD §7 / §16. */
 export const MODEL_CLASS =
-  "Act I reduced: lumped 3-body coupling cell (freight + frame + gate) + declared elastic members (axial, biaxial bending, torsion) + tension-only cables + finite motors/brakes/pressure + persistent plastic set. Not co-rotational FEM, not fracture-energy, not Craig–Bampton.";
+  "Act I reduced: lumped 3-body coupling cell (freight + frame + gate) + declared elastic members (axial, biaxial bending, torsion) + tension-only cables + a single-axis load pendulum + a DC hoist drive with back-EMF and a current limit + inverse-time breaker protection + finite brakes/pressure + persistent plastic set. Not co-rotational FEM, not fracture-energy, not Craig–Bampton.";
 
 export const AUTHORITY_DT = 1 / 30;
 export const MECHANICS_DT = 1 / 120;
@@ -47,6 +47,7 @@ export type Act =
   | { type: "abandon_drive" }
   | { type: "sling"; a: string; b: string }
   | { type: "clear_sling" }
+  | { type: "vent_close" }
   | { type: "mark_save_used" }
   | { type: "end_act" };
 
@@ -62,6 +63,11 @@ export interface FreightState {
   payout_m: number;
   payload_released: boolean;
   cargo_damaged: boolean;
+  /** Pendulum angle of the suspended load under the carrier, radians. */
+  payload_swing_rad: number;
+  payload_swing_velocity_radps: number;
+  /** Hoist motor armature current, A. Drawn from the process bus. */
+  hoist_current_a: number;
 }
 
 export interface FrameState {
@@ -82,6 +88,8 @@ export interface GateState {
   inventory_kg: number;
   seal_misalignment_m: number;
   wedged: boolean;
+  /** Vent valve left latched open. Authority state, so it survives a save. */
+  vent_open: boolean;
 }
 
 export interface MemberState {
@@ -132,6 +140,8 @@ export interface BreakerState {
 
 export interface ElectricalState {
   breakers: BreakerState[];
+  /** Total process-island demand, A. */
+  process_load_a: number;
   shop_powered: boolean;
   bay_lights: boolean;
   drive_powered: boolean;

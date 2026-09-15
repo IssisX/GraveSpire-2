@@ -25,6 +25,19 @@ const kFrameDampingNsPm = 7.2e5;
 const kFrameTorsionNmPrad = 2.2e7;
 const kFrameTorsionDamping = 1.1e6;
 const kYieldDeflectionM = 0.055;
+/**
+ * Isotropic hardening: accumulated permanent set raises the elastic limit, so
+ * plastic flow arrests at a finite deflection instead of running away. Without
+ * it the section is ideally plastic and any demand above the plastic limit
+ * grows the set without bound.
+ */
+const kFrameHardening = 0.8;
+/**
+ * Declared limit state for the transfer frame. Beyond this the Act I reduction
+ * has nothing meaningful left to say, so the configuration is held and reported
+ * rather than integrated into nonsense. This is a declared boundary, not a
+ * fracture model.
+ */
 const kFailureDeflectionM = 0.24;
 const kGateAreaM2 = 7.5;
 const kGateInertiaKgM2 = 9600.0;
@@ -33,6 +46,50 @@ const kGatePressureArmM = 0.42;
 const kCableStiffnessNpm = 1.9e6;
 const kCableDampingNsPm = 8.0e4;
 const kGalleryDeadN = 28000;
+
+/**
+ * Hoist drive — declared reduced DC model.
+ *
+ *   i = (V - k_e * omega) / R, limited by the drive's current limit
+ *   F_rope = k_t_line * i
+ *
+ * The drive therefore has a finite capacity: it cannot lift an arbitrary mass,
+ * its current rises as it slows toward stall, and a released brake with no
+ * command lets the load back-drive the mechanism against gearbox drag rather
+ * than hanging in mid-air. This is a machine abstraction, not a full motor
+ * topology, and it is not the GDD Sec.8 electromechanical contract.
+ */
+const kHoistOmegaPerMps = 11.0;
+const kHoistBackEmf = 17.5;
+const kHoistResistanceOhm = 3.1;
+const kHoistCurrentLimitA = 190.0;
+const kHoistForcePerAmpN = 620.0;
+const kHoistGearboxDragNsPm = 5.2e3;
+/** Drum, gearbox and rope inertia referred to the rope, kg. */
+const kHoistReflectedInertiaKg = 9000.0;
+/** Rope force the fail-safe drum brake can hold before it slips, N. */
+const kBrakeHoldingForceN = 1.45e5;
+
+/** Load pendulum under the carrier. Short sling, so it settles quickly. */
+const kSlingLengthM = 1.35;
+const kSwingDampingRatio = 0.1;
+
+/** Traverse drive: finite too, and it draws current while it runs. */
+const kTraverseAccelMps2 = 1.1;
+const kTraverseCurrentA = 28.0;
+
+/** Process island demand that is not the carrier, A. */
+const kProcessBaseLoadA = 115.0;
+const kBayLightLoadA = 85.0;
+const kGateMotorLoadA = 45.0;
+const kDriveCabinetLoadA = 74.0;
+const kHabLoadA = 55.0;
+const kShopLoadA = 31.0;
+
+/** Inverse-time protection: seconds of sustained 2x overload before tripping. */
+const kBreakerTripTauS = 7.0;
+/** Seconds for thermal memory to bleed off from a full trip threshold. */
+const kBreakerCoolTauS = 28.0;
 
 function cloneState(state: WorldState): WorldState {
   return structuredClone(state);
@@ -48,21 +105,70 @@ export class Simulation {
   private lastGood_: WorldState;
 
   constructor(state?: WorldState) {
-    this.state_ = state ? cloneState(state) : createInitialState();
     this.commands_ = COMMANDS.map(() => false);
+    if (state) {
+      this.state_ = cloneState(state);
+    } else {
+      this.state_ = createInitialState();
+      this.settleInitialState();
+    }
     this.lastGood_ = cloneState(this.state_);
+  }
+
+  /**
+   * Bring a fresh world to its resting condition before play starts.
+   *
+   * Bay 07 has been carrying this load and this vessel pressure for a long
+   * time. Starting every coupled body at zero displacement and letting it ring
+   * into place would be a startup artifact, and its overshoot would write
+   * permanent set the structure never actually took. Settle, then restore the
+   * declared pre-existing damage state and the clock.
+   */
+  private settleInitialState(): void {
+    const declaredSet = this.state_.frame.plastic_set_m;
+    const declaredDamage = this.state_.frame.damage;
+    const declaredMemberState = this.state_.members.map((m) => ({
+      id: m.id,
+      plastic_set_m: m.plastic_set_m,
+      damage: m.damage,
+    }));
+    for (let i = 0; i < 900; i++) {
+      for (let k = 0; k < SUBSTEPS; k++) this.stepMechanics(MECHANICS_DT);
+      this.commitMembers();
+    }
+    this.commitElectrical();
+    this.state_.frame.plastic_set_m = declaredSet;
+    this.state_.frame.damage = declaredDamage;
+    for (const d of declaredMemberState) {
+      const m = this.state_.members.find((x) => x.id === d.id);
+      if (!m) continue;
+      m.plastic_set_m = d.plastic_set_m;
+      m.damage = d.damage;
+    }
+    this.state_.frame.velocity_mps = 0;
+    this.state_.frame.angular_velocity_radps = 0;
+    this.state_.freight.vertical_velocity_mps = 0;
+    this.state_.freight.lateral_velocity_mps = 0;
+    this.state_.freight.payload_swing_rad = 0;
+    this.state_.freight.payload_swing_velocity_radps = 0;
+    this.state_.freight.brake_temperature_k = 293.15;
+    this.state_.mechanics_step = 0;
+    for (const b of this.state_.electrical.breakers) b.thermal = 0;
   }
 
   setCommand(command: Command, enabled: boolean): void {
     const idx = COMMANDS.indexOf(command);
     this.commands_[idx] = enabled;
     if (command === "CarrierBrake" && enabled) {
-      this.state_.freight.brake_engaged = !this.state_.freight.brake_engaged;
-      this.push(
-        this.state_.freight.brake_engaged
-          ? "Carrier brake engaged."
-          : "Carrier brake released.",
-      );
+      const f = this.state_.freight;
+      if (f.brake_engaged && !this.state_.electrical.carrier_powered) {
+        // Fail-safe design: the drum brake is held off by control power. With a
+        // dead bus it cannot be released at all.
+        this.push("Brake will not release. It is held off by control power, and the bus is dead.");
+        return;
+      }
+      f.brake_engaged = !f.brake_engaged;
+      this.push(f.brake_engaged ? "Carrier brake engaged." : "Carrier brake released.");
     } else if (command === "FrameBrace" && enabled) {
       this.state_.frame.brace_connected = true;
       this.state_.frame.brace_stiffness_npm = 4.0e6;
@@ -75,6 +181,11 @@ export class Simulation {
       const brace = this.state_.members.find((m) => m.id === "neck_brace");
       if (brace) brace.braced = false;
       this.push("Brace cut. Demand returns to the transfer frame.");
+    } else if (command === "GateVent" && enabled) {
+      // Edge on the vent command latches the valve; releasing the control does
+      // not shut it. Closing it is a second, deliberate command.
+      this.state_.gate.vent_open = true;
+      this.push("Vent valve open. Inventory is discharging.");
     } else if (command === "GateWedge" && enabled) {
       this.state_.gate.wedged = !this.state_.gate.wedged;
       this.push(this.state_.gate.wedged ? "Gate wedged." : "Gate wedge pulled.");
@@ -136,6 +247,10 @@ export class Simulation {
           s.freight.cargo_damaged = true;
           this.push("Release from height. Cargo took the hit.");
         }
+        if (Math.abs(s.freight.payload_swing_rad) > 0.09) {
+          s.freight.cargo_damaged = true;
+          this.push("Released while the load was still swinging. It landed off-station and took the corner.");
+        }
         if (!s.freight.brake_engaged) {
           this.push("Released without brake. Deck took an impulse.");
         }
@@ -144,6 +259,7 @@ export class Simulation {
         if (
           s.freight.brake_engaged &&
           Math.abs(s.freight.vertical_velocity_mps) < 0.4 &&
+          Math.abs(s.freight.payload_swing_rad) < 0.05 &&
           Math.abs(s.gate.seal_misalignment_m) < 0.05
         ) {
           s.flags.payload_on_neck = true;
@@ -176,10 +292,9 @@ export class Simulation {
           return "Housing is too far out of alignment to unbolt. Brace, jack, or unload the frame.";
         }
         const walk = evaluateTraversal(s);
-        const access =
-          (walk.find((e) => e.id === "neck_main")?.valid ?? false) ||
-          (walk.find((e) => e.id === "gallery_to_neck")?.valid ?? false);
-        if (!access) return "No maintenance walk to the housing.";
+        if (!(walk.find((e) => e.id === "neck_main")?.valid ?? false)) {
+          return "No maintenance walk to the housing. The transfer deck is still out of alignment — brace it, jack it, or take the load off it.";
+        }
         s.flags.drive_present = false;
         s.flags.drive_recovered = true;
         const driveBrk = this.breaker("brk_drive");
@@ -214,6 +329,12 @@ export class Simulation {
         });
         this.push(`Sling committed ${action.a} → ${action.b}. Tension-only.`);
         return "Sling committed.";
+      }
+      case "vent_close": {
+        if (!s.gate.vent_open) return "Vent valve is already shut.";
+        s.gate.vent_open = false;
+        this.push("Vent valve shut. Whatever inventory is left stays in the vessel.");
+        return "Vent shut.";
       }
       case "clear_sling": {
         s.cables = s.cables.filter((c) => c.id !== "sling");
@@ -268,38 +389,94 @@ export class Simulation {
     const traverseAxis =
       Number(this.active("CarrierRight")) - Number(this.active("CarrierLeft"));
 
-    const power = elec.carrier_powered ? 1 : 0.12;
-    const liftAccel = 1.35 * liftAxis * power;
-    freight.vertical_velocity_mps += liftAccel * dt;
-    freight.lateral_velocity_mps += 1.1 * traverseAxis * power * dt;
+    const powered = elec.carrier_powered;
+    const mEff = freight.payload_kg + kHoistReflectedInertiaKg;
+    const weightForce = freight.payload_kg * G;
 
-    if (freight.brake_engaged && liftAxis === 0) {
-      const before = freight.vertical_velocity_mps;
-      freight.vertical_velocity_mps *= Math.exp(-9.0 * dt);
-      const dissipated =
-        0.5 *
-        freight.payload_kg *
-        (before * before - freight.vertical_velocity_mps * freight.vertical_velocity_mps);
-      freight.brake_temperature_k += Math.max(0, dissipated) / 18000.0;
+    // --- hoist drive: speed-regulated, current-limited, gravity feedforward --
+    // A zero command asks the drive to hold, and holding costs real current.
+    // It is not an infinite-force constraint: beyond the current limit the load
+    // wins and the rope pays out.
+    let current = 0;
+    if (powered && !freight.brake_engaged) {
+      const targetSpeed = liftAxis * 0.45;
+      const feedForward = weightForce / kHoistForcePerAmpN;
+      const demand = feedForward + 200.0 * (targetSpeed - freight.vertical_velocity_mps);
+      current = clamp(demand, -kHoistCurrentLimitA, kHoistCurrentLimitA);
+      // Back-EMF caps what the supply can actually push at speed.
+      const omega = freight.vertical_velocity_mps * kHoistOmegaPerMps;
+      const ceiling = (clamp(elec.voltage_process, 0, 520) - kHoistBackEmf * omega) / kHoistResistanceOhm;
+      const floor = (-clamp(elec.voltage_process, 0, 520) - kHoistBackEmf * omega) / kHoistResistanceOhm;
+      current = clamp(current, Math.min(floor, 0), Math.max(ceiling, 0));
     }
+    freight.hoist_current_a = Math.abs(current);
+    const motorForce = kHoistForcePerAmpN * current;
+    const dragForce = -kHoistGearboxDragNsPm * freight.vertical_velocity_mps;
+
+    if (freight.brake_engaged) {
+      // Fail-safe drum brake: holds until rope force exceeds its capacity.
+      const demand = Math.abs(weightForce - motorForce);
+      if (demand <= kBrakeHoldingForceN) {
+        const before = freight.vertical_velocity_mps;
+        freight.vertical_velocity_mps *= Math.exp(-9.0 * dt);
+        const dissipated =
+          0.5 * mEff * (before * before - freight.vertical_velocity_mps * freight.vertical_velocity_mps);
+        freight.brake_temperature_k += Math.max(0, dissipated) / 18000.0;
+      } else {
+        const slip = Math.sign(motorForce - weightForce) * kBrakeHoldingForceN;
+        freight.vertical_velocity_mps += ((motorForce - weightForce + dragForce + slip) / mEff) * dt;
+        freight.brake_temperature_k += (Math.abs(slip * freight.vertical_velocity_mps) * dt) / 9000.0;
+      }
+    } else {
+      freight.vertical_velocity_mps += ((motorForce - weightForce + dragForce) / mEff) * dt;
+    }
+
+    // --- traverse ------------------------------------------------------------
+    const lateralVelBefore = freight.lateral_velocity_mps;
+    freight.lateral_velocity_mps += kTraverseAccelMps2 * traverseAxis * (powered ? 1 : 0) * dt;
     freight.lateral_velocity_mps *= Math.exp(-1.8 * dt);
+
     freight.height_m = clamp(freight.height_m + freight.vertical_velocity_mps * dt, 0.45, 7.6);
+    if (freight.height_m <= 0.45 && freight.vertical_velocity_mps < 0) freight.vertical_velocity_mps = 0;
+    if (freight.height_m >= 7.6 && freight.vertical_velocity_mps > 0) freight.vertical_velocity_mps = 0;
+
     freight.lateral_m = clamp(freight.lateral_m + freight.lateral_velocity_mps * dt, -5.8, 5.8);
+    if (freight.lateral_m <= -5.8 || freight.lateral_m >= 5.8) freight.lateral_velocity_mps = 0;
     freight.payout_m = freight.height_m;
+
+    // --- suspended load pendulum --------------------------------------------
+    // A traverse start or stop swings the load; the swing is a real offset that
+    // the transfer frame feels, not a decoration on the mesh.
+    if (!freight.payload_released) {
+      const accelLat = clamp((freight.lateral_velocity_mps - lateralVelBefore) / dt, -12, 12);
+      const omegaN = Math.sqrt(G / kSlingLengthM);
+      const theta = freight.payload_swing_rad;
+      const alpha =
+        -(G / kSlingLengthM) * Math.sin(theta) -
+        (accelLat / kSlingLengthM) * Math.cos(theta) -
+        2 * kSwingDampingRatio * omegaN * freight.payload_swing_velocity_radps;
+      freight.payload_swing_velocity_radps += alpha * dt;
+      freight.payload_swing_rad = clamp(theta + freight.payload_swing_velocity_radps * dt, -0.6, 0.6);
+    } else {
+      freight.payload_swing_velocity_radps *= Math.exp(-6 * dt);
+      freight.payload_swing_rad *= Math.exp(-6 * dt);
+    }
 
     const elasticLen = frame.deflection_m - frame.plastic_set_m;
     const cableExtension = Math.max(0, 0.018 + 0.12 * elasticLen);
+    // Rope force is whatever is actually transmitted: the drum brake holding
+    // static weight, or the drive's rope force when the brake is off.
+    const ropeForce = freight.brake_engaged ? weightForce : Math.max(0, motorForce);
     freight.cable_tension_n = Math.max(
       0,
-      freight.payload_kg * (G + liftAccel) +
-        kCableStiffnessNpm * cableExtension +
-        kCableDampingNsPm * frame.velocity_mps,
+      ropeForce + kCableStiffnessNpm * cableExtension + kCableDampingNsPm * frame.velocity_mps,
     );
 
-    if (this.active("GateVent")) {
-      const discharge = Math.min(gate.inventory_kg, (0.9 + 0.000012 * gate.pressure_pa) * dt);
-      gate.inventory_kg -= discharge;
-      gate.pressure_pa = 420000.0 * gate.inventory_kg / 310.0;
+    // The vent valve is a latched position, not a button someone has to lean on.
+    if (gate.vent_open || this.active("GateVent")) {
+      const discharge = Math.min(gate.inventory_kg, (1.7 + 0.000023 * gate.pressure_pa) * dt);
+      gate.inventory_kg = Math.max(0, gate.inventory_kg - discharge);
+      gate.pressure_pa = (420000.0 * gate.inventory_kg) / 310.0;
     }
 
     const gateAxis = Number(this.active("GateOpen")) - Number(this.active("GateClose"));
@@ -335,7 +512,11 @@ export class Simulation {
     const carrierForce = freight.cable_tension_n;
     const gateForce = gate.pressure_pa * kGateAreaM2;
     const jackForce = this.active("FrameJack") ? -7.5e5 : 0.0;
-    const offsetFactor = 1 + 0.4 * Math.abs(freight.lateral_m);
+    // The load's true lateral station is the trolley plus its swing. A swinging
+    // load is a moving eccentricity, not a decoration.
+    const effectiveOffsetM =
+      freight.lateral_m + (freight.payload_released ? 0 : kSlingLengthM * Math.sin(freight.payload_swing_rad));
+    const offsetFactor = 1 + 0.4 * Math.abs(effectiveOffsetM);
     const stiffness =
       kFrameBaseStiffnessNpm * (1.0 - 0.28 * frame.damage) + frame.brace_stiffness_npm;
     const frameForce =
@@ -348,7 +529,7 @@ export class Simulation {
     frame.velocity_mps += (frameForce / kFrameMassKg) * dt;
     frame.deflection_m += frame.velocity_mps * dt;
 
-    const torsionMoment = carrierForce * freight.lateral_m + gateForce * 1.65;
+    const torsionMoment = carrierForce * effectiveOffsetM + gateForce * 1.65;
     const torsionAccel =
       (torsionMoment - kFrameTorsionNmPrad * frame.twist_rad - kFrameTorsionDamping * frame.angular_velocity_radps) /
       8.5e6;
@@ -356,9 +537,19 @@ export class Simulation {
     frame.twist_rad += frame.angular_velocity_radps * dt;
 
     const elasticDeflection = frame.deflection_m - frame.plastic_set_m;
-    if (Math.abs(elasticDeflection) > kYieldDeflectionM) {
+    const elasticLimit = kYieldDeflectionM + kFrameHardening * Math.abs(frame.plastic_set_m);
+    if (Math.abs(elasticDeflection) > elasticLimit) {
+      frame.plastic_set_m = frame.deflection_m - Math.sign(elasticDeflection) * elasticLimit;
+    }
+    if (Math.abs(frame.deflection_m) >= kFailureDeflectionM) {
+      // Declared limit reached. Hold the configuration; do not keep integrating.
+      frame.deflection_m = Math.sign(frame.deflection_m) * kFailureDeflectionM;
+      frame.velocity_mps = 0;
       frame.plastic_set_m =
-        frame.deflection_m - Math.sign(elasticDeflection) * kYieldDeflectionM;
+        frame.deflection_m - Math.sign(elasticDeflection || 1) * elasticLimit;
+      this.push(
+        "Transfer frame reached its declared limit deflection. The Act I model holds it there; it does not pretend to fracture.",
+      );
     }
     const nextDamage = clamp01(Math.abs(frame.plastic_set_m) / 0.12);
     if (nextDamage > frame.damage + 0.08 && frame.damage < 0.08) {
@@ -423,21 +614,23 @@ export class Simulation {
 
   private commitElectrical(): void {
     const e = this.state_.electrical;
+    const f = this.state_.freight;
     const br = (id: string) => this.breaker(id);
-    const gen = Boolean(br("brk_gen")?.closed) && !br("brk_gen")?.tripped;
-    e.process_isolated = !gen;
-    const processBus = gen;
-    const driveCab =
-      processBus &&
-      Boolean(br("brk_drive")?.closed) &&
-      this.state_.flags.drive_present &&
-      !br("brk_drive")?.tripped;
-    const gateFeed = processBus && Boolean(br("brk_gate")?.closed);
-    const habViaDrive = driveCab && Boolean(br("brk_hab")?.closed);
-    const habWest = e.chen_rerouted && processBus && Boolean(br("brk_west")?.closed);
-    const hab = habViaDrive || habWest || (e.chen_rerouted && !e.process_isolated && Boolean(br("brk_west")?.closed));
-    const shop = hab && Boolean(br("brk_shop")?.closed) && !br("brk_shop")?.tripped;
+    const live = (id: string) => {
+      const b = br(id);
+      return Boolean(b?.closed) && !b?.tripped;
+    };
 
+    const processBus = live("brk_gen");
+    e.process_isolated = !processBus;
+    const driveCab = processBus && live("brk_drive") && this.state_.flags.drive_present;
+    const gateFeed = processBus && live("brk_gate");
+    const habViaDrive = driveCab && live("brk_hab");
+    const habWest = processBus && e.chen_rerouted && live("brk_west");
+    const hab = habViaDrive || habWest;
+    const shop = hab && live("brk_shop");
+
+    const wasPowered = e.carrier_powered;
     e.carrier_powered = processBus;
     e.drive_powered = driveCab;
     e.gate_powered = gateFeed;
@@ -446,27 +639,101 @@ export class Simulation {
     e.voltage_process = processBus ? 480 : 0;
     e.voltage_shop = shop ? (habWest && !habViaDrive ? 452 : 480) : 0;
 
+    // Fail-safe drum brake: losing control power sets the brake. The load stops
+    // where it is instead of running away. This is a property of this mechanism.
+    if (wasPowered && !processBus && !f.brake_engaged) {
+      f.brake_engaged = true;
+      this.push("Control power lost. Fail-safe drum brake set. The load is held, not dropped.");
+    }
+
+    // ---- demand ------------------------------------------------------------
+    // The hoist is a real consumer: holding a load off the brake costs current,
+    // and the process bus has a finite rating.
+    const traverseRunning = this.active("CarrierLeft") || this.active("CarrierRight");
+    const gateRunning = this.active("GateOpen") || this.active("GateClose");
+    const carrierDemand =
+      (processBus ? f.hoist_current_a : 0) + (processBus && traverseRunning ? kTraverseCurrentA : 0);
+
+    const processLoad = processBus
+      ? kProcessBaseLoadA +
+        (e.bay_lights ? kBayLightLoadA : 0) +
+        (gateFeed && gateRunning ? kGateMotorLoadA : 0) +
+        (driveCab ? kDriveCabinetLoadA : 0) +
+        (hab ? kHabLoadA : 0) +
+        (shop ? kShopLoadA : 0) +
+        carrierDemand
+      : 0;
+    e.process_load_a = processLoad;
+
     const bGen = br("brk_gen");
-    if (bGen) bGen.load_a = processBus ? 210 + (driveCab ? 70 : 0) + (shop ? 28 : 0) : 0;
+    if (bGen) bGen.load_a = processLoad;
     const bDrive = br("brk_drive");
-    if (bDrive) bDrive.load_a = driveCab ? 74 : 0;
+    if (bDrive) bDrive.load_a = driveCab ? kDriveCabinetLoadA + (habViaDrive ? kHabLoadA : 0) : 0;
+    const bGate = br("brk_gate");
+    if (bGate) bGate.load_a = gateFeed && gateRunning ? kGateMotorLoadA : 0;
+    const bHab = br("brk_hab");
+    if (bHab) bHab.load_a = habViaDrive ? kHabLoadA : 0;
+    const bWest = br("brk_west");
+    if (bWest) bWest.load_a = habWest ? kHabLoadA + (shop ? kShopLoadA : 0) : 0;
     const bShop = br("brk_shop");
-    if (bShop) bShop.load_a = shop ? 31 : 0;
+    if (bShop) bShop.load_a = shop ? kShopLoadA : 0;
+
+    this.commitProtection();
   }
 
+  /**
+   * Inverse-time overcurrent protection with thermal memory.
+   *
+   * A brief inrush and a sustained overload are not the same event: thermal
+   * state accumulates with the square of the overload and bleeds off when the
+   * device is back inside its rating.
+   */
+  private commitProtection(): void {
+    const dt = AUTHORITY_DT;
+    for (const b of this.state_.electrical.breakers) {
+      if (!b.closed) {
+        b.thermal = Math.max(0, b.thermal - dt / kBreakerCoolTauS);
+        continue;
+      }
+      if (b.tripped) continue;
+      const ratio = b.rating_a > 0 ? b.load_a / b.rating_a : 0;
+      if (ratio > 1.02) {
+        b.thermal = clamp01(b.thermal + ((ratio * ratio - 1) * dt) / kBreakerTripTauS);
+        if (b.thermal >= 1) {
+          b.tripped = true;
+          // Tripping opens the contacts. The handle sits in the tripped
+          // position until someone resets it at the board.
+          b.closed = false;
+          b.thermal = 1;
+          this.push(
+            `${b.name} tripped on sustained overload: ${b.load_a.toFixed(0)} A against a ${b.rating_a.toFixed(0)} A rating.`,
+          );
+        }
+      } else {
+        b.thermal = Math.max(0, b.thermal - dt / kBreakerCoolTauS);
+      }
+    }
+  }
+
+  /**
+   * Report a clean hold over the receiving deck.
+   *
+   * This does not put the load down. The payload is on the deck when the player
+   * releases it, and only then does its weight leave the rope and enter the
+   * structure. Holding is the condition that makes a clean release possible.
+   */
   private commitDock(): void {
     const f = this.state_.freight;
-    if (this.state_.flags.payload_on_neck) return;
+    if (this.state_.flags.payload_on_neck || f.payload_released) return;
     const over =
       f.lateral_m > 4.2 &&
       f.height_m > 2.1 &&
       f.height_m < 2.55 &&
       f.brake_engaged &&
       Math.abs(f.vertical_velocity_mps) < 0.12 &&
-      !f.payload_released;
+      Math.abs(f.payload_swing_rad) < 0.035;
     if (over) {
-      this.state_.flags.payload_on_neck = true;
-      this.push("Carrier is holding over the neck deck. Brake is real. Alignment is inside tolerance.");
+      this.push("Holding over the receiving deck. Brake is real, swing is dead, station is inside tolerance. Release when ready.");
     }
   }
 

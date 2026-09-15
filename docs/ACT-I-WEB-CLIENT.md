@@ -1,0 +1,195 @@
+# Act I web client — ownership map and declared reduction
+
+Evidence class: **INSPECTED** against `web/src` on this branch, plus
+**EXECUTED** for the checks named at the end. This document describes the
+TypeScript/Three.js Act I client that ships inside the Android WebView. It is
+not a description of the Godot 4.7 + C++ coupling cell on `main`, and it does
+not claim any part of the GDD §16 acceptance table.
+
+## What owns what
+
+| Fact | Owner | File |
+|---|---|---|
+| Freight, frame, gate, members, cables, electrical, NPC, flags, events | `Simulation` | `web/src/sim/simulation.ts` |
+| Whether a route exists | traversal derived from authority | `web/src/sim/missions.ts` |
+| Whether a mission succeeded | predicates over authority + traversal | `web/src/sim/missions.ts` |
+| What the player can act on from here | context resolver | `web/src/game/context.ts` |
+| Which verbs an object offers | action catalog | `web/src/game/actions.ts` |
+| Machine command surfaces | machine modes | `web/src/game/machine.ts` |
+| Player position, support, collision | character controller | `web/src/game/player.ts` |
+| Camera embodiment | gait presentation | `web/src/game/gait.ts` |
+| Meshes, lights, HUD, audio | view | `web/src/game/level.ts`, `web/src/game/ui/*` |
+
+There is no second writer. The UI issues typed commands and actions; it never
+sets a mission flag, a damage value, or a traversal edge directly. Presentation
+cannot decide that a structure broke, a machine succeeded, or a route opened.
+
+### Presentation is not world truth
+
+`gait.ts` produces small camera offsets from authoritative movement state:
+stride phase, lateral weight transfer, counter-roll, acceleration lean with an
+under-damped recovery, turn lag, landing compression, and idle postural motion.
+
+Those offsets reach the rendered camera only. Interaction rays are cast from
+`eyePose(player.x, player.y + player.eye, player.z, player.yaw, player.pitch)` —
+the authoritative pose, with no gait term. Collision, support, moving-platform
+inheritance, and fall consequence are likewise untouched. Setting
+`gaitIntensity` to 0 removes every offset and changes nothing else.
+
+## Declared mechanical reduction
+
+`MODEL_CLASS` in `web/src/sim/types.ts` is the binding statement. As of this
+branch it covers:
+
+- a lumped three-body coupling cell (freight + transfer frame + isolation gate);
+- declared elastic members with axial, biaxial bending and torsion terms;
+- tension-only cables;
+- a single-axis pendulum for the suspended load;
+- a DC hoist drive with back-EMF, a current limit, and gravity feedforward;
+- a fail-safe drum brake with a finite holding force and frictional heating;
+- inverse-time overcurrent protection with thermal memory;
+- pressure inventory with a latched vent valve;
+- persistent plastic set on the frame and on members.
+
+It is **not** co-rotational FEM, not fracture-energy regularised, not
+Craig–Bampton reduced, and not a claim of measured device performance.
+
+### What the Act I pass added to the model
+
+Five changes were made to the model, all on top of existing authoritative
+state rather than beside it:
+
+1. **The hoist is a real electrical consumer.** Holding a load off the brake
+   costs roughly 130 A on the process bus. With the drive cabinet and the hab
+   feed also on that island, total demand exceeds the generator breaker's
+   400 A rating and the breaker trips on inverse time. Losing control power
+   sets the fail-safe brake, so the load is held rather than dropped. Shedding
+   a feeder — or moving the hab band onto Chen's west bus so the drive cabinet
+   *can* be shed — is what makes a sustained hoist possible.
+2. **The load swings.** Traverse acceleration drives a pendulum whose angle is
+   a real lateral eccentricity feeding frame torsion. Docking requires letting
+   it settle; releasing mid-swing damages cargo.
+3. **Venting has a physical cost.** The vent valve latches open, discharges
+   over time, and the jet occupies a bounded region west of the seal that
+   pushes anything standing in it. The jet is a declared reduced hazard in
+   `runtime.ts`; it reads authority state and feeds nothing back into it.
+4. **The frame hardens.** The transfer frame was ideally plastic: past its
+   elastic limit it flowed without bound, and an abusive load could write
+   metres of permanent set. Accumulated set now raises the elastic limit, so
+   flow arrests at a finite deflection, and `kFailureDeflectionM` — previously
+   declared and unused — is now a real limit state that holds the
+   configuration and says so instead of integrating into nonsense.
+5. **Docking means the load is down.** `payload_on_neck` was being set while
+   the payload was still on the hook, which meant its weight was counted into
+   the gallery load while the rope was still carrying it. Holding cleanly over
+   the deck is now reported as the condition for a clean release; the flag is
+   set when the player actually releases.
+
+Together these make Act I's opening causal rather than a checklist. Venting
+the vessel unloads the frame's torsion enough to bring the seal inside dock
+tolerance. Shedding a feeder is what lets the hoist run long enough to get the
+load across. Releasing the load takes its weight off the transfer frame, and
+*that* is what opens the maintenance walk to the drive.
+
+Mission 2 previously read true on the first frame of a new game, because
+reaching the neck district through Gallery 12 was counted as the maintenance
+walk being open. The walk is the route along the distorted transfer deck to
+the drive housing, and it opens by changing support or load — unloading the
+carrier, connecting the neck brace, or jacking it. Three routes, all physical.
+
+## Contextual interaction
+
+Two resolutions run every frame against different budgets:
+
+- **Look target** — a distance-aware reticle cone (about 20° inside 3.5 m,
+  tightening to 16° beyond it) out to each object's declared `lookRange`, with
+  line of sight. This is what the player is examining, and what inspection
+  reads.
+- **Action target** — bounded by the object's declared `reach`, its facing
+  cone, line of sight, and whether any action is currently eligible. Candidates
+  are scored on alignment, proximity and priority, and the incumbent keeps a
+  stickiness bonus so the prompt does not flicker between neighbours.
+
+Seeing Carrier 07-A across the bay identifies it and lets it be inspected. It
+does not let it be driven: the carrier is operated from its pulpit, like
+everything else in the bay.
+
+The eight-tool rail is gone. Every verb it held — inspect, isolate, sling,
+brace, jack, cut, operate, talk — still exists, routed by
+`actionsFor(state, interactable, ctx)`. A tap performs the dominant action; a
+hold opens a compact selector only when more than one action is genuinely
+eligible. Rigging remains a deliberate two-stage sequence.
+
+Machine verbs live in temporary modes. Entering a mode shows that machine's
+real commands and its readouts; leaving it, or stepping out of reach, clears
+every command it was driving.
+
+## Settings
+
+`web/src/game/settings.ts` is the authority. Every entry is backed by real
+input handling or a real renderer/scene control: look and touch sensitivity,
+invert Y, movement deadzone, auto sprint, gait intensity, FOV, HUD density,
+prompt mode, render scale, shadow enable and resolution, secondary light
+fixtures, steam particle budget, master volume.
+
+There is deliberately **no** texture-resolution, reflection, volumetric,
+post-processing, or antialiasing setting, because this renderer does not
+implement those systems and a control that changes nothing is a lie. Settings
+persist to `localStorage` and never alter mechanical world truth.
+
+## Delivery
+
+`web` → `vite build` → `android/app/src/main/assets/www` → WebView APK →
+GitHub Actions artifact and prerelease. `.github/workflows/android-apk.yml`
+builds from `Grok`, `Claude`, and `claude/**`, publishing to a branch-specific
+release tag. No step assumes a desktop workstation.
+
+## Tests
+
+`web/tests/authority.test.ts` holds the Act I reference cases, run with
+`npm test` in `web/` and gated in `.github/workflows/verify.yml`. They lock
+what a player can see, and every one of them can fail:
+
+- off-axis load twists the frame and misaligns the gate seal;
+- venting relieves that misalignment;
+- yield writes permanent set, hardening arrests the flow, unloading preserves
+  the set;
+- the hoist refuses a set brake, costs real current to hold, and stays inside
+  its current limit;
+- sustained overload trips the generator breaker on inverse time, power loss
+  sets the fail-safe brake, and shedding a feeder prevents the trip;
+- a traverse swings the load and the swing damps;
+- identical command streams produce identical authority state;
+- save/load preserves set, damage, payout, brake, pressure, vent position,
+  mid-motion velocity and broken connectivity, and a legacy save migrates
+  without producing non-finite state;
+- cutting gallery supports kills the traversal edge and the NPC route;
+- every mission predicate reads world state, including that nothing is
+  complete at the start and the act will not close on an undecided drive;
+- gait offsets stay bounded and vanish entirely at intensity 0;
+- a distant machine is identifiable but not actionable, and line of sight is
+  enforced.
+
+## Verified here
+
+- `npm run typecheck` — clean.
+- `npm test` — 62/62 authority reference checks.
+- `npm run build` — production bundle emitted.
+- `make test` — native C++ reference cases still pass, unchanged.
+- Headless Chromium against the production build: boot → menu → settings →
+  new game → intro → play; contextual targeting probed at eight world poses;
+  machine mode entered, refused a hoist against a set brake, hoisted after the
+  brake was released, and exited on walking away; hold-to-choose selector and
+  inspection opened.
+- Headless Chromium touch emulation at 1344x620 and 880x400, both landscape:
+  four persistent controls during traversal, dynamic stick appears on contact
+  and releases cleanly, analogue magnitude preserved (full deflection 2.55 m/s
+  vs part deflection 0.38 m/s), simultaneous move and look, machine verbs
+  present only in-mode, no horizontal overflow, no page errors.
+
+## Not verified here
+
+- Frame rate on Fold 6-class hardware, or any device.
+- APK install and WebView behaviour on a physical device.
+- Fold/unfold ergonomics in hand.
+- Rendered image quality on a real GPU. The headless runs use SwiftShader.

@@ -145,3 +145,79 @@ export function mantleProbe(
   if (!best) return null;
   return { x: px, y: best.maxy, z: pz };
 }
+
+/**
+ * Slab test: does the segment from origin to target enter this box?
+ * Returns the entry parameter in [0,1], or null.
+ */
+function segmentHitsBox(
+  ox: number,
+  oy: number,
+  oz: number,
+  dx: number,
+  dy: number,
+  dz: number,
+  c: Collider,
+): number | null {
+  let tmin = 0;
+  let tmax = 1;
+  const lo = [c.minx, c.miny, c.minz];
+  const hi = [c.maxx, c.maxy, c.maxz];
+  const o = [ox, oy, oz];
+  const d = [dx, dy, dz];
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(d[i]!) < 1e-9) {
+      if (o[i]! < lo[i]! || o[i]! > hi[i]!) return null;
+      continue;
+    }
+    const inv = 1 / d[i]!;
+    let t1 = (lo[i]! - o[i]!) * inv;
+    let t2 = (hi[i]! - o[i]!) * inv;
+    if (t1 > t2) {
+      const s = t1;
+      t1 = t2;
+      t2 = s;
+    }
+    if (t1 > tmin) tmin = t1;
+    if (t2 < tmax) tmax = t2;
+    if (tmin > tmax) return null;
+  }
+  return tmin;
+}
+
+/**
+ * Line-of-sight between an eye point and a world point.
+ *
+ * Used by contextual targeting so that a machine visible across the bay is not
+ * treated as reachable through a column. Colliders named in `ignore` (the
+ * target's own body) and colliders containing the eye are skipped.
+ */
+export function lineOfSight(
+  ox: number,
+  oy: number,
+  oz: number,
+  tx: number,
+  ty: number,
+  tz: number,
+  colliders: Collider[],
+  ignore?: ReadonlySet<string>,
+): boolean {
+  const dx = tx - ox;
+  const dy = ty - oy;
+  const dz = tz - oz;
+  const len = Math.hypot(dx, dy, dz);
+  if (len < 1e-4) return true;
+  // Stop just short of the target so its own mounting surface never blocks it.
+  const shrink = Math.min(0.45, len * 0.35) / len;
+  const ex = dx * (1 - shrink);
+  const ey = dy * (1 - shrink);
+  const ez = dz * (1 - shrink);
+  for (const c of colliders) {
+    if (c.disabled) continue;
+    if (ignore?.has(c.id)) continue;
+    if (ox >= c.minx && ox <= c.maxx && oy >= c.miny && oy <= c.maxy && oz >= c.minz && oz <= c.maxz) continue;
+    const t = segmentHitsBox(ox, oy, oz, ex, ey, ez, c);
+    if (t !== null && t > 1e-4 && t < 1) return false;
+  }
+  return true;
+}

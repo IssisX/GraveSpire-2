@@ -8,7 +8,6 @@ export function GameApp() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const handleRef = useRef<GameHandle | null>(null);
   const [booted, setBooted] = useState(false);
-  const phase = useGame((s) => s.phase);
   const touch = useGame((s) => s.touch);
 
   useEffect(() => {
@@ -33,13 +32,8 @@ export function GameApp() {
 
   return (
     <div className={touch ? "gs-root is-touch" : "gs-root"}>
-      <canvas
-        ref={canvasRef}
-        className="gs-canvas"
-        tabIndex={0}
-        aria-label="GRAVESPIRE viewport"
-      />
-      <Hud booted={booted} handleRef={handleRef} phase={phase} />
+      <canvas ref={canvasRef} className="gs-canvas" tabIndex={0} aria-label="GRAVESPIRE viewport" />
+      <Hud booted={booted} handleRef={handleRef} />
     </div>
   );
 }

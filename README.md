@@ -45,18 +45,37 @@ The C++ core owns consequential simulation state and committed outcomes.
 Godot scripts issue commands and render snapshots. Presentation cannot decide
 that a structure broke, a machine succeeded, or a route became valid.
 
-## Grok branch — Act I Android APK
+## Act I Android APK — the playable branch
 
-`main` stays the Godot 4.7 + C++ coupling cell. This **Grok** branch keeps that
-tree and adds a playable Act I debug APK:
+`main` stays the Godot 4.7 + C++ coupling cell. The Act I branches keep that
+tree and add a playable Act I debug APK:
 
 - `web/` — TypeScript authority + Three.js first-person bay (touch-first)
 - `android/` — WebView wrapper (WebViewAssetLoader, fold/unfold safe)
-- `.github/workflows/android-apk.yml` — builds the APK and publishes
-  the `grok-act1-apk` prerelease
+- `.github/workflows/android-apk.yml` — builds the APK and publishes a
+  branch-specific prerelease (`grok-act1-apk`, `claude-act1-apk`)
 
-Install: open https://github.com/IssisX/GraveSpire-2/releases/tag/grok-act1-apk
-and tap `gravespire-act1-debug.apk`. Allow unknown sources if Android asks.
+`docs/ACT-I-WEB-CLIENT.md` is the ownership map and the declared mechanical
+reduction for that client. Read it before changing the simulation or the
+interaction layer.
 
 This APK is **not** GDD §7/§16 co-rotational completeness, and it is **not**
 the Godot mobile export.
+
+### Player-experience pass
+
+The Act I client is built around one control model rather than a tool rail:
+
+- left thumb moves on a dynamic stick, right side looks by direct drag;
+- one Action control performs the best thing the world offers where you stand,
+  and a hold opens a compact selector only when more than one action is
+  genuinely eligible;
+- machine verbs — hoist, traverse, brake, release, open, close, vent, wedge,
+  jack, brace — appear only while you are operating that machine, and leave
+  when you do;
+- dense engineering readings live in inspection and in machine panels, not in
+  permanent HUD chrome.
+
+Camera embodiment is a procedural gait driven by real movement state. Those
+offsets are presentation only: interaction targeting, collision, support and
+authoritative player position never see them.

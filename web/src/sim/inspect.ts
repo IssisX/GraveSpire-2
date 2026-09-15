@@ -22,8 +22,17 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
           { label: "Hoist payout", value: n(f.payout_m, 2), unit: "m", source: "measured", confidence: 0.95 },
           { label: "Brake", value: f.brake_engaged ? "holding" : "released", unit: "", source: "measured", confidence: 0.99 },
           { label: "Brake temp", value: n(f.brake_temperature_k, 1), unit: "K", source: "measured", confidence: 0.88 },
+          { label: "Load swing", value: n((f.payload_swing_rad * 180) / Math.PI, 2), unit: "deg", source: "estimated", confidence: 0.6 },
+          { label: "Hoist current", value: n(f.hoist_current_a, 0), unit: "A", source: "measured", confidence: 0.9 },
         ],
-        warning: f.brake_temperature_k > 420 ? "Brake is cooking. Frictional work is heat." : undefined,
+        warning:
+          f.brake_temperature_k > 420
+            ? "Brake is cooking. Frictional work is heat."
+            : !f.brake_engaged && f.hoist_current_a > 60
+              ? "The drive is holding this load electrically. That current is on the process bus for as long as the brake is off."
+              : Math.abs(f.payload_swing_rad) > 0.06
+                ? "The load is swinging. That offset is moving, and the transfer frame feels every degree of it."
+                : undefined,
       };
     case "cable":
       return {
@@ -100,9 +109,15 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
     case "brk_west":
     case "brk_hab":
     case "brk_gate": {
+      const gen = state.electrical.breakers.find((b) => b.id === "brk_gen");
+      const genOver = Boolean(gen && gen.closed && !gen.tripped && gen.load_a > gen.rating_a);
       const lines = state.electrical.breakers.map((b) => ({
         label: b.name,
-        value: b.tripped ? "tripped" : b.closed ? `closed ${n(b.load_a, 0)}` : "open",
+        value: b.tripped
+          ? "TRIPPED"
+          : b.closed
+            ? `closed ${n(b.load_a, 0)}/${n(b.rating_a, 0)}`
+            : "open",
         unit: b.closed && !b.tripped ? "A" : "",
         source: "measured" as const,
         confidence: 0.95,
@@ -127,8 +142,24 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
             source: "measured",
             confidence: 1,
           },
+          {
+            label: "Process demand",
+            value: `${n(state.electrical.process_load_a, 0)} / ${n(gen?.rating_a ?? 400, 0)}`,
+            unit: "A",
+            source: "measured",
+            confidence: 0.92,
+          },
+          {
+            label: "Gen thermal",
+            value: `${n((gen?.thermal ?? 0) * 100, 0)}`,
+            unit: "%",
+            source: "estimated",
+            confidence: 0.7,
+          },
         ],
-        warning: "Disconnected islands are explicit. There is no numerical leakage keeping a dark shop faintly on.",
+        warning: genOver
+          ? "Process generator breaker is over rating. Thermal memory is running. Shed a feeder or the island goes dark."
+          : "Disconnected islands are explicit. There is no numerical leakage keeping a dark shop faintly on.",
       };
     }
     case "dock":

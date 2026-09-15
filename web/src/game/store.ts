@@ -1,29 +1,22 @@
 import { create } from "zustand";
 import type { InspectReading, ObjectiveStatus, SimEvent } from "@/sim/types.ts";
 import { MODEL_CLASS } from "@/sim/types.ts";
+import type { ActionOption } from "./actions.ts";
+import type { InteractKind } from "./context.ts";
+import type { MachineKind, Readout } from "./machine.ts";
+import type { Guidance, WorldWarning } from "./opening.ts";
+import { DEFAULT_SETTINGS, type Settings } from "./settings.ts";
 
-export type Tool =
-  | "inspect"
-  | "operate"
-  | "isolate"
-  | "sling"
-  | "brace"
-  | "jack"
-  | "cut"
-  | "talk";
-
-export const TOOLS: { id: Tool; label: string; hint: string }[] = [
-  { id: "inspect", label: "Inspect", hint: "Readings with units and provenance" },
-  { id: "operate", label: "Operate", hint: "Raise / lower / drive / brake / open" },
-  { id: "isolate", label: "Isolate", hint: "Breakers, valves, process feed" },
-  { id: "sling", label: "Sling", hint: "Two attachments, then commit" },
-  { id: "brace", label: "Brace", hint: "Install a real constraint" },
-  { id: "jack", label: "Jack", hint: "Take load, do not delete it" },
-  { id: "cut", label: "Cut", hint: "Slow. Declared members only" },
-  { id: "talk", label: "Talk", hint: "They do not orbit you" },
-];
-
-export type Phase = "title" | "playing" | "paused" | "dialogue" | "ending" | "dead";
+export type Phase =
+  | "boot"
+  | "menu"
+  | "intro"
+  | "playing"
+  | "paused"
+  | "settings"
+  | "dialogue"
+  | "ending"
+  | "dead";
 
 export interface DialogueView {
   npcId: string;
@@ -37,67 +30,97 @@ export interface LookTarget {
   id: string;
   label: string;
   dist: number;
-  kind: "machine" | "member" | "npc" | "board" | "bench" | "world";
+  kind: InteractKind;
 }
 
-export interface HudSnap {
-  tension_kn: number;
-  deflection_mm: number;
-  twist_deg: number;
-  set_mm: number;
-  pressure_kpa: number;
-  misalign_mm: number;
-  brake: boolean;
-  brake_k: number;
-  shop_v: number;
-  tick: number;
-  time_s: number;
-  district: string;
-  districtShort: string;
-  carrierPower: boolean;
-  gateOpen: boolean;
+/** One machine control as the HUD needs to draw it. */
+export interface MachineControlView {
+  id: string;
+  label: string;
+  mode: "hold" | "toggle" | "pulse";
+  keyLabel: string;
+  engaged: boolean;
+  refused: string | null;
+}
+
+export interface MachineView {
+  kind: MachineKind;
+  title: string;
+  subtitle: string;
+  controls: MachineControlView[];
+  readouts: Readout[];
+}
+
+export interface IntroView {
+  kicker: string;
+  text: string;
+  index: number;
+  total: number;
 }
 
 export interface GameUI {
   phase: Phase;
-  tool: Tool;
-  toolWheel: boolean;
+  /** Phase to return to when the settings screen closes. */
+  settingsReturn: Phase;
+
   look: LookTarget | null;
+  /** The dominant action a tap performs right now. */
+  action: ActionOption | null;
+  /** Every eligible action on the current action target, best first. */
+  actionOptions: ActionOption[];
+  selectorOpen: boolean;
+  /** Something is in view but physically out of reach from here. */
+  outOfReach: { label: string; need: number; dist: number } | null;
+
+  machine: MachineView | null;
   inspect: InspectReading | null;
   inspectOpen: boolean;
+
   objectives: ObjectiveStatus[];
+  guidance: Guidance | null;
+  warnings: WorldWarning[];
   events: SimEvent[];
   dialogue: DialogueView | null;
+  intro: IntroView | null;
+
   prompt: string;
   work: { label: string; progress: number } | null;
-  snap: HudSnap | null;
   slingA: string | null;
-  operateId: string | null;
   message: string | null;
+
   touch: boolean;
   ready: boolean;
+  hasSave: boolean;
+  settings: Settings;
   ending: { title: string; body: string; freight: string; power: string; people: string } | null;
   modelClass: string;
 }
 
 const empty: GameUI = {
-  phase: "title",
-  tool: "inspect",
-  toolWheel: false,
+  phase: "boot",
+  settingsReturn: "menu",
   look: null,
+  action: null,
+  actionOptions: [],
+  selectorOpen: false,
+  outOfReach: null,
+  machine: null,
   inspect: null,
   inspectOpen: false,
   objectives: [],
+  guidance: null,
+  warnings: [],
   events: [],
   dialogue: null,
+  intro: null,
   prompt: "",
   work: null,
-  snap: null,
   slingA: null,
-  operateId: null,
   message: null,
   touch: false,
   ready: false,
+  hasSave: false,
+  settings: { ...DEFAULT_SETTINGS },
   ending: null,
   modelClass: MODEL_CLASS,
 };

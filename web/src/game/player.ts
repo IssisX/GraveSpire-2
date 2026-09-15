@@ -14,11 +14,11 @@ const CAP_H = 1.72;
 const CAP_H_CROUCH = 1.05;
 
 export class Player {
-  x = 5.6;
+  x = 8.8;
   y = 0.05;
-  z = -1.35;
-  yaw = -1.62;
-  pitch = 0.06;
+  z = -4.0;
+  yaw = 1.1;
+  pitch = -0.02;
   vx = 0;
   vy = 0;
   vz = 0;
@@ -28,11 +28,15 @@ export class Player {
   eye = EYE;
   speed = 0;
   coyote = 0;
-  bob = 0;
   mantleT = 0;
   mantleTo: { x: number; y: number; z: number } | null = null;
   airTime = 0;
   fallFrom = 0;
+  /** Downward speed at the instant of the most recent landing, m/s. Read and
+   *  cleared by presentation; it is never used to move the player. */
+  landingImpact = 0;
+  /** Magnitude of the movement request last step, 0..1. */
+  moveInput = 0;
 
   forward(): { x: number; z: number } {
     return { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) };
@@ -41,6 +45,7 @@ export class Player {
     return { x: Math.cos(this.yaw), z: -Math.sin(this.yaw) };
   }
 
+  /** Radians per unit of look delta. Sensitivity is applied upstream. */
   applyLook(dx: number, dy: number, sens = 0.0022) {
     this.yaw -= dx * sens;
     this.pitch -= dy * sens;
@@ -77,12 +82,16 @@ export class Player {
 
     const f = this.forward();
     const r = this.right();
-    const maxSp = this.crouch ? CROUCH : actions.sprint && this.grounded ? SPRINT : WALK;
+    const gaitTop = this.crouch ? CROUCH : actions.sprint && this.grounded ? SPRINT : WALK;
     const wishX = f.x * actions.moveY + r.x * actions.moveX;
     const wishZ = f.z * actions.moveY + r.z * actions.moveX;
     const wishLen = Math.hypot(wishX, wishZ);
     const nx = wishLen > 0 ? wishX / wishLen : 0;
     const nz = wishLen > 0 ? wishZ / wishLen : 0;
+    // Analogue magnitude is preserved: a half-deflected thumb walks at half
+    // pace instead of snapping to the full gait.
+    this.moveInput = Math.min(1, Math.max(wishLen, actions.moveMag ?? wishLen));
+    const maxSp = gaitTop * this.moveInput;
     const accel = this.grounded ? 18 : 4.5;
     const targetVx = nx * maxSp;
     const targetVz = nz * maxSp;
@@ -118,6 +127,8 @@ export class Player {
       this.z += platformDelta.z;
     }
 
+    const wasGrounded = this.grounded;
+    const approachSpeed = this.vy;
     const steps = Math.max(1, Math.ceil((Math.hypot(this.vx, this.vy, this.vz) * dt) / 0.18));
     const sdt = dt / steps;
     for (let i = 0; i < steps; i++) {
@@ -137,9 +148,17 @@ export class Player {
       if (res.hitHead && this.vy > 0) this.vy = 0;
     }
 
+    if (!wasGrounded && this.grounded && approachSpeed < -0.6) {
+      this.landingImpact = -approachSpeed;
+    }
     this.speed = Math.hypot(this.vx, this.vz);
-    if (this.grounded && this.speed > 0.4) this.bob += this.speed * dt * 1.7;
-    else this.bob *= 1 - Math.min(1, dt * 6);
+  }
+
+  /** Consume the landing severity recorded by the last step. */
+  takeLandingImpact(): number {
+    const v = this.landingImpact;
+    this.landingImpact = 0;
+    return v;
   }
 
   fallDamage(): "none" | "hurt" | "dead" {

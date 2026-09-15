@@ -1,16 +1,9 @@
 import * as THREE from "three";
 import type { Collider } from "./collision.ts";
 import { createMaterials, makeSignTexture, type Materials } from "./materials.ts";
+import type { Interactable, InteractKind } from "./context.ts";
 
-export type Interactable = {
-  id: string;
-  label: string;
-  x: number;
-  y: number;
-  z: number;
-  r: number;
-  kind: "machine" | "member" | "npc" | "board" | "bench" | "world";
-};
+export type { Interactable, InteractKind } from "./context.ts";
 
 export type Bindings = {
   carrier: THREE.Group;
@@ -25,8 +18,16 @@ export type Bindings = {
   brakeGlow: THREE.Mesh;
   shopLights: THREE.Mesh[];
   bayLights: THREE.PointLight[];
+  /** Secondary fixtures the light-quality setting may switch off. */
+  optionalLights: THREE.PointLight[];
   steam: THREE.Points;
+  steamMaterial: THREE.PointsMaterial;
+  steamCount: number;
   hookLight: THREE.PointLight;
+  /** Pulpit console face. Driven by process-bus thermal state. */
+  console: THREE.Mesh;
+  /** Hazard beacon on the pulpit. Lit while the bus is over rating. */
+  beacon: THREE.Mesh;
 };
 
 export type Level = {
@@ -165,8 +166,17 @@ class Kit {
     return l;
   }
 
-  interact(id: string, label: string, x: number, y: number, z: number, r: number, kind: Interactable["kind"]) {
-    this.interactables.push({ id, label, x, y, z, r, kind });
+  interact(
+    id: string,
+    label: string,
+    x: number,
+    y: number,
+    z: number,
+    reach: number,
+    kind: InteractKind,
+    opts?: Partial<Omit<Interactable, "id" | "label" | "x" | "y" | "z" | "reach" | "kind">>,
+  ) {
+    this.interactables.push({ id, label, x, y, z, reach, kind, ...opts });
   }
 }
 
@@ -190,6 +200,7 @@ export function buildLevel(scene: THREE.Scene): Level {
   const k = new Kit(scene, mats);
   const bayLights: THREE.PointLight[] = [];
   const shopLights: THREE.Mesh[] = [];
+  const optionalLights: THREE.PointLight[] = [];
 
   scene.background = new THREE.Color(0x10151a);
   scene.fog = new THREE.Fog(0x10151a, 52, 128);
@@ -274,8 +285,26 @@ export function buildLevel(scene: THREE.Scene): Level {
   k.box(4.2, 1.2, 3.2, 4.8, 0.6, -7.6, mats.steel, { id: "pulpit" });
   k.box(4.2, 0.08, 3.2, 4.8, 1.24, -7.6, mats.diamond, { id: "pulpit_top" });
   k.box(1.6, 1.1, 0.12, 4.8, 1.85, -6.1, mats.black, { collider: false });
-  k.box(1.4, 0.7, 0.04, 4.8, 1.85, -6.04, mats.emissiveCool, { collider: false });
-  k.interact("carrier", "Carrier 07-A", 4.8, 1.6, -7.2, 2.2, "machine");
+  // The pulpit console is a readable instrument face, not a light box: dim
+  // enough to read against, and its brightness tracks process-bus stress.
+  const consoleMat = new THREE.MeshStandardMaterial({
+    color: 0x0a1418,
+    emissive: 0x4e8496,
+    emissiveIntensity: 0.55,
+    roughness: 0.35,
+  });
+  const consoleFace = k.box(1.28, 0.58, 0.04, 4.8, 1.85, -6.04, consoleMat, { collider: false });
+  const beacon = k.box(0.18, 0.18, 0.18, 5.75, 2.45, -6.1, mats.emissiveWarn.clone(), { collider: false, cast: false });
+  // The carrier is driven from here. Standing in the bay and looking at the
+  // hook does not give you the hoist: you walk to the pulpit like everyone else.
+  bayLights.push(k.lightFixture(5.0, 6.2, -7.2, true));
+  k.interact("pulpit", "Carrier 07-A pulpit", 4.8, 1.75, -6.2, 2.9, "station", {
+    lookRange: 16,
+    noOcclusion: true,
+    priority: 1,
+  });
+  // The carrier body itself stays identifiable and inspectable across the bay.
+  k.interact("carrier", "Carrier 07-A", 4.8, 1.6, -7.2, 3.4, "machine", { lookRange: 42 });
 
   // gantry
   const gantry = new THREE.Group();
@@ -320,7 +349,11 @@ export function buildLevel(scene: THREE.Scene): Level {
     platform: "carrier",
   });
 
+  // The load hangs from the sheave on a short sling. `payload` is the pivot, so
+  // rotating it about Z reproduces the authoritative pendulum angle instead of
+  // sliding the crate sideways for looks.
   const payload = new THREE.Group();
+  const payloadBody = new THREE.Group();
   const crate = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.7, 1.9), mats.carrier);
   crate.castShadow = true;
   const band = new THREE.Mesh(new THREE.BoxGeometry(2.48, 0.22, 1.98), mats.hazard);
@@ -329,7 +362,11 @@ export function buildLevel(scene: THREE.Scene): Level {
   band2.position.y = -0.45;
   const corner = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.08, 2.0), mats.emissiveWarn);
   corner.position.y = 0.82;
-  payload.add(crate, band, band2, corner);
+  const sling = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.35, 6), mats.cable);
+  sling.position.y = 1.53;
+  payloadBody.add(crate, band, band2, corner, sling);
+  payloadBody.position.y = -1.35;
+  payload.add(payloadBody);
   scene.add(payload);
 
   const payloadDeck = new THREE.Group();
@@ -353,15 +390,15 @@ export function buildLevel(scene: THREE.Scene): Level {
   }
   k.cyl(0.8, 0.8, 3.4, 38.4, 1.8, -4.6, mats.steelDark);
   k.cyl(0.7, 0.7, 2.8, 38.4, 1.5, -6.4, mats.steel);
-  k.interact("gate", "Isolation gate G-07", 40.2, 2.2, -1.2, 3.4, "machine");
+  k.interact("gate", "Isolation gate G-07", 40.2, 2.2, -1.2, 3.4, "machine", { lookRange: 34 });
 
   // process board — isolation is a real breaker, not a UI toggle
   k.box(0.22, 2.7, 3.9, 38.85, 1.85, -8.15, mats.steelBlack, { id: "proc_board" });
   k.box(0.08, 2.4, 3.6, 38.72, 1.85, -8.15, mats.emissiveCool, { collider: false });
-  k.interact("brk_gen", "Process generator breaker", 38.2, 1.8, -9.4, 1.5, "board");
-  k.interact("brk_drive", "Drive cabinet breaker", 38.2, 1.8, -8.5, 1.5, "board");
-  k.interact("brk_gate", "Gate motor feed", 38.2, 1.8, -7.6, 1.5, "board");
-  k.interact("brk_hab", "Hab feed via drive", 38.2, 1.8, -6.7, 1.5, "board");
+  k.interact("brk_gen", "Process generator breaker", 38.1, 1.8, -9.4, 1.3, "board", { lookRange: 9, noOcclusion: true, priority: 1 });
+  k.interact("brk_drive", "Drive cabinet breaker", 38.1, 1.8, -8.5, 1.3, "board", { lookRange: 9, noOcclusion: true, priority: 1 });
+  k.interact("brk_gate", "Gate motor feed breaker", 38.1, 1.8, -7.6, 1.3, "board", { lookRange: 9, noOcclusion: true, priority: 1 });
+  k.interact("brk_hab", "Hab feed breaker", 38.1, 1.8, -6.7, 1.3, "board", { lookRange: 9, noOcclusion: true, priority: 1 });
 
   // gate
   const gate = new THREE.Mesh(new THREE.BoxGeometry(0.7, 6.4, 7.2), mats.gate);
@@ -398,10 +435,10 @@ export function buildLevel(scene: THREE.Scene): Level {
   k.ibeam(18, 53, 9.4, 0, "x", mats.steel);
   k.box(3.4, 2.2, 2.6, 56.2, 1.2, 2.4, mats.carrier, { id: "drive_box", collider: true });
   k.box(3.4, 0.08, 2.6, 56.2, 2.34, 2.4, mats.hazard, { collider: false });
-  k.interact("drive", "Transfer drive housing", 56.2, 1.6, 2.4, 2.4, "machine");
-  k.interact("frame", "Load-transfer frame", 52, 3.2, 0, 3.5, "machine");
-  k.interact("dock", "Neck receiving deck", 36.5, 2.3, 0, 3.2, "world");
-  k.interact("neck_brace", "Neck transfer brace", 53, 1.4, 0.2, 2.8, "member");
+  k.interact("drive", "Transfer drive housing", 56.2, 1.6, 1.0, 2.6, "machine", { lookRange: 26 });
+  k.interact("frame", "Load-transfer frame", 52, 3.0, 0, 4.0, "machine", { lookRange: 30 });
+  k.interact("dock", "Transfer receiving deck", 27.5, 0.9, 0, 3.8, "world", { lookRange: 30 });
+  k.interact("neck_brace", "Neck transfer brace", 53, 1.4, 0.2, 3.0, "member", { lookRange: 24 });
   const members = new Map<string, THREE.Mesh>();
   const neckBrace = k.box(10.4, 0.32, 0.32, 53, 1.35, 0.15, mats.steel, { id: "neck_brace", collider: false, ry: 0.38 });
   members.set("neck_brace", neckBrace);
@@ -420,16 +457,22 @@ export function buildLevel(scene: THREE.Scene): Level {
   }
   k.box(18, 0.2, 4.2, 21, -9.4, 0, mats.steelDark, { collider: false });
 
-  // receiving deck over well east
-  k.box(10, 0.22, 6.4, 36, 2.28, 0, mats.steel, { id: "recv" });
-  k.box(10, 0.05, 0.4, 36, 2.42, 3.1, mats.hazard, { collider: false });
-  k.box(10, 0.05, 0.4, 36, 2.42, -3.1, mats.hazard, { collider: false });
+  // Transfer receiving deck. It bridges the east end of the freight well at bay
+  // level, which is where the carrier's declared dock window actually puts a
+  // load. Walk on from the east floor; the well rails guard both long sides.
+  k.box(9, 0.3, 6.8, 27.5, 0.05, 0, mats.steel, { id: "recv" });
+  k.box(9, 0.06, 0.45, 27.5, 0.21, 3.15, mats.hazard, { collider: false });
+  k.box(9, 0.06, 0.45, 27.5, 0.21, -3.15, mats.hazard, { collider: false });
+  for (const x of [24, 31]) {
+    k.cyl(0.14, 0.14, 9.0, x, -4.6, 2.9, mats.steelDark);
+    k.cyl(0.14, 0.14, 9.0, x, -4.6, -2.9, mats.steelDark);
+  }
 
   // lights bay
   for (const x of [8, 18, 28, 36]) {
     bayLights.push(k.lightFixture(x, 12.4, 0, true));
-    k.lightFixture(x, 8.8, 9.1, false);
-    k.lightFixture(x, 8.8, -9.1, false);
+    optionalLights.push(k.lightFixture(x, 8.8, 9.1, false));
+    optionalLights.push(k.lightFixture(x, 8.8, -9.1, false));
   }
 
   // --- Gallery 12 ---
@@ -448,13 +491,13 @@ export function buildLevel(scene: THREE.Scene): Level {
   ] as const) {
     const m = k.box(0.38, 0.42, 14.2, x, 2.15, 19.5, mats.steel, { id, collider: false });
     members.set(id, m);
-    k.interact(id, `Gallery span ${id.slice(-1).toUpperCase()}`, x, 2.5, 19.5, 2.1, "member");
+    k.interact(id, `Gallery span ${id.slice(-1).toUpperCase()}`, x, 2.5, 19.5, 2.4, "member", { lookRange: 20 });
   }
   k.railing(9, 27.2, 57, 27.2, 2.45);
   k.railing(9, 11.8, 13, 11.8, 2.45);
   k.sign("LT-12", "LOAD-TRANSFER GALLERY", 6.4, 1.6, 33, 5.4, 27.6, Math.PI);
-  k.lightFixture(24, 7.2, 19.5, false);
-  k.lightFixture(42, 7.2, 19.5, false);
+  optionalLights.push(k.lightFixture(24, 7.2, 19.5, false));
+  optionalLights.push(k.lightFixture(42, 7.2, 19.5, false));
 
   // stairs gallery to neck
   for (let i = 0; i < 6; i++) {
@@ -471,18 +514,18 @@ export function buildLevel(scene: THREE.Scene): Level {
   k.box(4.4, 0.9, 1.2, 70, 0.45, -8.4, mats.steel, { id: "bench1" });
   k.box(3.2, 0.9, 1.2, 78, 0.45, -8.4, mats.steel, { id: "save_bench" });
   k.box(0.4, 0.15, 0.4, 77.2, 1.05, -8.1, mats.emissiveCool, { collider: false });
-  k.interact("save_bench", "Circ Shop bench", 78, 1.1, -8.4, 2.0, "bench");
+  k.interact("save_bench", "Circ Shop bench", 78, 1.1, -7.7, 2.4, "bench", { lookRange: 16 });
   // board
   k.box(0.2, 2.4, 3.6, 86.5, 2.0, 2.4, mats.steelBlack, { id: "board_panel", collider: false });
   k.box(0.08, 2.1, 3.3, 86.38, 2.0, 2.4, mats.emissiveCool, { collider: false });
-  k.interact("board", "Distribution board", 85.2, 1.6, 2.4, 2.2, "board");
-  k.interact("brk_shop", "Shop breaker", 85.2, 1.6, 2.4, 2.2, "board");
-  k.interact("brk_west", "West bus (reroute)", 85.2, 1.6, 1.2, 1.8, "board");
+  k.interact("brk_shop", "Circ Shop breaker", 85.6, 1.7, 2.9, 1.6, "board", { lookRange: 12, noOcclusion: true, priority: 1 });
+  
+  k.interact("brk_west", "West bus breaker", 85.6, 1.7, 1.6, 1.6, "board", { lookRange: 12, noOcclusion: true, priority: 1 });
   k.sign("SH-A", "CIRC SHOP  ·  HAB BAND A", 5.6, 1.5, 75, 5.2, 9.5, Math.PI);
   for (const x of [68, 75, 82]) {
     const fixture = k.box(1.4, 0.1, 0.3, x, 5.9, -2, mats.emissiveCool, { collider: false, cast: false });
     shopLights.push(fixture);
-    k.lightFixture(x, 5.9, -2, false);
+    optionalLights.push(k.lightFixture(x, 5.9, -2, false));
   }
   // crates
   k.box(1.4, 1.2, 1.1, 68, 0.6, 5.4, mats.paintGreen, { id: "crate1" });
@@ -524,10 +567,10 @@ export function buildLevel(scene: THREE.Scene): Level {
   npcs.set("ilea", worker(scene, mats, 0xdde4ea));
   npcs.set("chen", worker(scene, mats, 0x4a8aca));
   npcs.set("skip", worker(scene, mats, 0xb05a2a));
-  k.interact("rami", "Rami Okonkwo", 4.6, 1.4, -7.4, 2.0, "npc");
-  k.interact("ilea", "Ilea Voss", 74.2, 1.2, -1.8, 2.0, "npc");
-  k.interact("chen", "Chen Park", 51.4, 1.2, -5.2, 2.0, "npc");
-  k.interact("skip", "Skip Delgado", 33, 3.4, 19.4, 2.0, "npc");
+  k.interact("rami", "Rami Okonkwo", 4.6, 1.4, -7.4, 2.6, "npc", { lookRange: 22 });
+  k.interact("ilea", "Ilea Voss", 74.2, 1.2, -1.8, 2.6, "npc", { lookRange: 22 });
+  k.interact("chen", "Chen Park", 51.4, 1.2, -5.2, 2.6, "npc", { lookRange: 22 });
+  k.interact("skip", "Skip Delgado", 33, 3.4, 19.4, 2.6, "npc", { lookRange: 22 });
 
   // steam particles
   const steamGeo = new THREE.BufferGeometry();
@@ -539,14 +582,19 @@ export function buildLevel(scene: THREE.Scene): Level {
     steamPos[i * 3 + 2] = -2 + Math.random() * 4;
   }
   steamGeo.setAttribute("position", new THREE.BufferAttribute(steamPos, 3));
-  const steam = new THREE.Points(
-    steamGeo,
-    new THREE.PointsMaterial({ color: 0xb0c0c8, size: 0.12, transparent: true, opacity: 0.35, depthWrite: false }),
-  );
+  const steamMaterial = new THREE.PointsMaterial({
+    color: 0xb0c0c8,
+    size: 0.12,
+    transparent: true,
+    opacity: 0.35,
+    depthWrite: false,
+  });
+  const steam = new THREE.Points(steamGeo, steamMaterial);
+  steam.frustumCulled = false;
   steam.visible = false;
   scene.add(steam);
 
-  k.interact("cable", "Hoist rope 07-A", 20, 6, 0, 2.5, "machine");
+  k.interact("cable", "Hoist rope 07-A", 20, 6, 0, 3.0, "machine", { lookRange: 36 });
 
   const bindings: Bindings = {
     carrier,
@@ -561,8 +609,13 @@ export function buildLevel(scene: THREE.Scene): Level {
     brakeGlow,
     shopLights,
     bayLights,
+    optionalLights,
     steam,
+    steamMaterial,
+    steamCount: steamN,
     hookLight,
+    console: consoleFace,
+    beacon,
   };
 
   return {
@@ -572,8 +625,10 @@ export function buildLevel(scene: THREE.Scene): Level {
     materials: mats,
     geos: k.geos,
     dispose: () => {
+      consoleMat.dispose();
       k.geos.forEach((g) => g.dispose());
       steamGeo.dispose();
+      steamMaterial.dispose();
     },
   };
 }

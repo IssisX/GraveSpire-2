@@ -1,6 +1,21 @@
+/**
+ * Input interpretation.
+ *
+ * Three sources land in the same place: keyboard + mouse, standard gamepads,
+ * and the touch layer. Movement is analogue everywhere and is never snapped to
+ * eight directions. Look is a delta stream, so a right-side drag is direct
+ * camera control rather than a second virtual stick.
+ */
+
+import type { Settings } from "./settings.ts";
+import { DEFAULT_SETTINGS } from "./settings.ts";
+
 export type Actions = {
+  /** Analogue move, magnitude preserved, deadzone already removed. */
   moveX: number;
   moveY: number;
+  moveMag: number;
+  /** Accumulated look delta for this frame, sensitivity and invert applied. */
   lookX: number;
   lookY: number;
   jump: boolean;
@@ -9,67 +24,35 @@ export type Actions = {
   sprint: boolean;
   interact: boolean;
   interactPressed: boolean;
-  inspect: boolean;
-  toolWheel: boolean;
+  interactReleased: boolean;
+  inspectPressed: boolean;
   pausePressed: boolean;
-  operateRaise: boolean;
-  operateLower: boolean;
-  operateLeft: boolean;
-  operateRight: boolean;
-  operateBrake: boolean;
-  operateVent: boolean;
-  operateOpen: boolean;
-  operateClose: boolean;
+  /** Cycle the contextual action selector without opening it (keyboard). */
+  cyclePressed: boolean;
 };
 
 const GAME_CODES = new Set([
-  "KeyW",
-  "KeyA",
-  "KeyS",
-  "KeyD",
-  "KeyQ",
-  "KeyE",
-  "KeyR",
-  "KeyF",
-  "KeyB",
-  "KeyT",
-  "KeyX",
-  "KeyV",
-  "KeyG",
-  "KeyZ",
-  "Space",
-  "ShiftLeft",
-  "ShiftRight",
-  "ControlLeft",
-  "ControlRight",
-  "Tab",
-  "KeyI",
-  "Escape",
-  "ArrowUp",
-  "ArrowDown",
-  "ArrowLeft",
-  "ArrowRight",
-  "Digit1",
-  "Digit2",
-  "Digit3",
-  "Digit4",
-  "Digit5",
-  "Digit6",
-  "Digit7",
-  "Digit8",
+  "KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "KeyR", "KeyF", "KeyB", "KeyT",
+  "KeyX", "KeyV", "KeyG", "KeyZ", "KeyC", "KeyI",
+  "Space", "ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight", "Tab", "Escape",
+  "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
 ]);
 
-function radial(x: number, y: number, dz = 0.15): { x: number; y: number } {
+/** Radial deadzone: direction is preserved and magnitude is rescaled. */
+function radial(x: number, y: number, dz: number): { x: number; y: number; m: number } {
   const m = Math.hypot(x, y);
-  if (m < dz) return { x: 0, y: 0 };
-  const scale = (m - dz) / (1 - dz) / m;
-  return { x: x * scale, y: y * scale };
+  if (m < dz) return { x: 0, y: 0, m: 0 };
+  const scaled = Math.min(1, (m - dz) / (1 - dz));
+  const k = scaled / m;
+  return { x: x * k, y: y * k, m: scaled };
 }
 
 export function detectTouch(): boolean {
   if (typeof window === "undefined") return false;
   try {
-    if (new URLSearchParams(window.location.search).has("touch")) return true;
+    const q = new URLSearchParams(window.location.search);
+    if (q.has("touch")) return true;
+    if (q.has("desktop")) return false;
   } catch {
     /* ignore */
   }
@@ -81,28 +64,28 @@ export function detectTouch(): boolean {
 export function createInput(canvas: HTMLCanvasElement) {
   const keys = new Set<string>();
   let injected: string[] = [];
-  let lookX = 0;
-  let lookY = 0;
+  let settings: Settings = { ...DEFAULT_SETTINGS };
+
+  let lookDX = 0;
+  let lookDY = 0;
+  let touchMoveX = 0;
+  let touchMoveY = 0;
+  let touchMoveMag = 0;
+  let touchInteract = false;
+
   let prevJump = false;
   let prevInteract = false;
   let prevPause = false;
-  let touchMoveX = 0;
-  let touchMoveY = 0;
-  let touchLookX = 0;
-  let touchLookY = 0;
+  let prevInspect = false;
+  let prevCycle = false;
   let ignoreLookUntil = 0;
-  let interactPulse = 0;
-  let inspectPulse = 0;
-  let pausePulse = 0;
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (GAME_CODES.has(e.code)) e.preventDefault();
     if (e.repeat) return;
     keys.add(e.code);
   };
-  const onKeyUp = (e: KeyboardEvent) => {
-    keys.delete(e.code);
-  };
+  const onKeyUp = (e: KeyboardEvent) => keys.delete(e.code);
   const clear = () => keys.clear();
   const onBlur = () => clear();
   const onVis = () => {
@@ -111,8 +94,8 @@ export function createInput(canvas: HTMLCanvasElement) {
   const onMouse = (e: MouseEvent) => {
     if (document.pointerLockElement !== canvas) return;
     if (performance.now() < ignoreLookUntil) return;
-    lookX += e.movementX;
-    lookY += e.movementY;
+    lookDX += e.movementX;
+    lookDY += e.movementY;
   };
   const onContext = (e: Event) => e.preventDefault();
 
@@ -133,21 +116,23 @@ export function createInput(canvas: HTMLCanvasElement) {
     const pads = navigator.getGamepads?.() ?? [];
     for (const p of pads) {
       if (!p || p.mapping !== "standard") continue;
-      const ls = radial(p.axes[0] ?? 0, p.axes[1] ?? 0);
+      const ls = radial(p.axes[0] ?? 0, p.axes[1] ?? 0, settings.moveDeadzone);
       mx += ls.x;
       my += -ls.y;
-      const rs = radial(p.axes[2] ?? 0, p.axes[3] ?? 0, 0.12);
+      const rs = radial(p.axes[2] ?? 0, p.axes[3] ?? 0, 0.1);
       lx += rs.x;
       ly += rs.y;
       if (p.buttons[0]?.pressed) keys.add("Space");
+      else keys.delete("Space");
       if (p.buttons[1]?.pressed) keys.add("ControlLeft");
+      if (p.buttons[2]?.pressed) keys.add("KeyE");
       if (p.buttons[9]?.pressed) keys.add("Escape");
-      if (p.buttons[7]!.value > 0.4) keys.add("ShiftLeft");
+      if ((p.buttons[7]?.value ?? 0) > 0.4) keys.add("ShiftLeft");
     }
     return { mx, my, lx, ly };
   }
 
-  function sample(): Actions {
+  function sample(dt: number): Actions {
     const gp = pollGamepad();
     let mx = gp.mx + touchMoveX;
     let my = gp.my + touchMoveY;
@@ -155,81 +140,118 @@ export function createInput(canvas: HTMLCanvasElement) {
     if (down("KeyD") || down("ArrowRight")) mx += 1;
     if (down("KeyW") || down("ArrowUp")) my += 1;
     if (down("KeyS") || down("ArrowDown")) my -= 1;
-    const mag = Math.hypot(mx, my);
+    let mag = Math.hypot(mx, my);
     if (mag > 1) {
       mx /= mag;
       my /= mag;
+      mag = 1;
     }
+    if (touchMoveMag > 0 && gp.mx === 0 && gp.my === 0) mag = Math.max(mag, touchMoveMag);
+
+    // Gamepad right stick is a rate, so it is integrated into the delta stream.
+    const padLook = 620 * dt;
+    const sens = settings.lookSensitivity;
+    const invert = settings.invertY ? -1 : 1;
+    const outLookX = (lookDX + gp.lx * padLook) * sens;
+    const outLookY = (lookDY + gp.ly * padLook) * sens * invert;
 
     const jump = down("Space");
-    const interact = down("KeyE") || interactPulse > 0;
-    const pause = down("Escape") || pausePulse > 0;
-    const inspect = down("KeyI") || down("Tab") || inspectPulse > 0;
+    const interactKey = down("KeyE");
+    const interact = interactKey || touchInteract;
+    const pauseKey = down("Escape");
+    const inspectKey = down("KeyI") || down("Tab");
+    const cycleKey = down("KeyQ");
+
     const actions: Actions = {
       moveX: mx,
       moveY: my,
-      lookX: lookX + touchLookX * 10 + gp.lx * 18,
-      lookY: lookY + touchLookY * 10 + gp.ly * 18,
+      moveMag: mag,
+      lookX: outLookX,
+      lookY: outLookY,
       jump,
       jumpPressed: jump && !prevJump,
       crouch: down("ControlLeft") || down("ControlRight") || down("KeyC"),
-      sprint: down("ShiftLeft") || down("ShiftRight"),
+      sprint: down("ShiftLeft") || down("ShiftRight") || (settings.autoSprint && mag > 0.92),
       interact,
-      interactPressed: (interact && !prevInteract) || interactPulse > 0,
-      inspect,
-      toolWheel: down("KeyQ"),
-      pausePressed: (pause && !prevPause) || pausePulse > 0,
-      operateRaise: down("KeyR"),
-      operateLower: down("KeyF"),
-      operateLeft: down("KeyZ"),
-      operateRight: down("KeyX"),
-      operateBrake: down("KeyB"),
-      operateVent: down("KeyV"),
-      operateOpen: down("KeyG"),
-      operateClose: down("KeyT"),
+      interactPressed: interact && !prevInteract,
+      interactReleased: !interact && prevInteract,
+      inspectPressed: inspectKey && !prevInspect,
+      pausePressed: pauseKey && !prevPause,
+      cyclePressed: cycleKey && !prevCycle,
     };
-    lookX = 0;
-    lookY = 0;
-    if (interactPulse > 0) interactPulse -= 1;
-    if (inspectPulse > 0) inspectPulse -= 1;
-    if (pausePulse > 0) pausePulse -= 1;
+
+    lookDX = 0;
+    lookDY = 0;
     prevJump = jump;
-    prevInteract = interact && interactPulse <= 0;
-    prevPause = pause && pausePulse <= 0;
+    prevInteract = interact;
+    prevPause = pauseKey;
+    prevInspect = inspectKey;
+    prevCycle = cycleKey;
     return actions;
   }
 
+  /** Dynamic stick output: already a unit-ish vector, deadzone applied here. */
   function setTouchMove(x: number, y: number) {
-    const v = radial(x, y, 0.12);
+    const v = radial(x, y, settings.moveDeadzone);
     touchMoveX = v.x;
     touchMoveY = v.y;
+    touchMoveMag = v.m;
   }
-  function setTouchLook(x: number, y: number) {
-    const v = radial(x, y, 0.1);
-    touchLookX = v.x;
-    touchLookY = v.y;
+
+  /** Direct look: raw pixel deltas from a right-side drag. */
+  function addTouchLook(dx: number, dy: number) {
+    if (performance.now() < ignoreLookUntil) return;
+    const k = 0.82 * settings.touchLookSensitivity;
+    lookDX += dx * k;
+    lookDY += dy * k;
   }
+
+  function setTouchInteract(on: boolean) {
+    touchInteract = on;
+  }
+
   function hold(code: string, on: boolean) {
     if (on) keys.add(code);
     else keys.delete(code);
   }
-  function pulse(code: string) {
-    if (code === "KeyE") interactPulse = 3;
-    else if (code === "KeyI") inspectPulse = 3;
-    else if (code === "Escape") pausePulse = 3;
-    else {
-      keys.add(code);
-      window.setTimeout(() => keys.delete(code), 90);
-    }
-  }
+
   function inject(codes: string[]) {
     injected = codes.slice();
   }
+
   function suppressLook(ms = 350) {
     ignoreLookUntil = performance.now() + ms;
-    lookX = 0;
-    lookY = 0;
+    lookDX = 0;
+    lookDY = 0;
   }
+
+  function applySettings(next: Settings) {
+    settings = next;
+  }
+
+  /**
+   * Drop every held input AND every edge-detection flag.
+   *
+   * Without clearing the previous-frame flags, a control still held when the
+   * phase changed reads as a release on the first frame back, which would fire
+   * a contextual action the player never asked for.
+   */
+  function releaseAll() {
+    keys.clear();
+    injected = [];
+    touchMoveX = 0;
+    touchMoveY = 0;
+    touchMoveMag = 0;
+    touchInteract = false;
+    lookDX = 0;
+    lookDY = 0;
+    prevJump = false;
+    prevInteract = false;
+    prevPause = false;
+    prevInspect = false;
+    prevCycle = false;
+  }
+
   function dispose() {
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("keyup", onKeyUp);
@@ -239,7 +261,19 @@ export function createInput(canvas: HTMLCanvasElement) {
     canvas.removeEventListener("contextmenu", onContext);
   }
 
-  return { sample, setTouchMove, setTouchLook, hold, pulse, inject, suppressLook, dispose, down };
+  return {
+    sample,
+    setTouchMove,
+    addTouchLook,
+    setTouchInteract,
+    hold,
+    inject,
+    suppressLook,
+    applySettings,
+    releaseAll,
+    dispose,
+    down,
+  };
 }
 
 export type Input = ReturnType<typeof createInput>;

@@ -2,11 +2,14 @@ name: android-apk
 
 on:
   push:
-    branches: [Grok]
+    branches:
+      - Grok
+      - Claude
+      - "claude/**"
   workflow_dispatch:
 
 concurrency:
-  group: android-apk-grok
+  group: android-apk-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -19,6 +22,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve release channel for this branch
+        id: channel
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF_NAME}" in
+            Grok) tag=grok-act1-apk; name="GRAVESPIRE Act I - debug APK (Grok)" ;;
+            *)    tag=claude-act1-apk; name="GRAVESPIRE Act I - debug APK (Claude)" ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -72,27 +86,31 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gravespire-act1-debug
+          name: gravespire-act1-debug-${{ github.ref_name }}
           path: dist-apk/gravespire-act1-debug.apk
           if-no-files-found: error
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: grok-act1-apk
-          name: GRAVESPIRE Act I — debug APK
+          tag_name: ${{ steps.channel.outputs.tag }}
+          name: ${{ steps.channel.outputs.name }}
           body: |
-            Debug APK for the Fold (Grok branch).
+            Debug APK for the Fold, built from `${{ github.ref_name }}` at ${{ github.sha }}.
 
             1. Tap the APK below.
             2. Allow install from GitHub if Android asks.
-            3. Left thumb walks, right thumb looks, Use on what you face.
+            3. Left thumb walks. Right side looks. One Action control does what
+               the world offers; hold it when more than one thing is possible.
+               Machine verbs appear only while you are operating that machine.
 
-            This is Act I as a WebView around the TypeScript/Three.js bay — not the Godot/C++ cell on main, not Unreal, not GDD §16 completeness.
+            This is Act I as a WebView around the TypeScript/Three.js bay running a
+            declared reduced mechanical model. It is not the Godot/C++ cell on `main`,
+            and it is not GDD §16 completeness.
           prerelease: true
           make_latest: false
           files: dist-apk/gravespire-act1-debug.apk
-          target_commitish: Grok
+          target_commitish: ${{ github.ref_name }}
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -135,16 +135,13 @@ export function evaluateMissions(state: WorldState): ObjectiveStatus[] {
     state.freight.brake_engaged &&
     Math.abs(state.gate.seal_misalignment_m) < 0.05;
   const walk = evaluateTraversal(state);
-  const maint = walk.some(
-    (e) =>
-      (e.id === "gallery_span" || e.id === "neck_main") &&
-      e.valid &&
-      (e.id === "neck_main" ? e.valid : e.valid),
-  );
-  const maintOpen =
-    (walk.find((e) => e.id === "neck_main")?.valid ?? false) ||
-    (walk.find((e) => e.id === "gallery_span")?.valid &&
-      (walk.find((e) => e.id === "gallery_to_neck")?.valid ?? false));
+  // The maintenance walk is the route along the transfer deck to the drive
+  // housing. It opens by changing support or load — unloading the carrier,
+  // connecting the brace, or jacking the neck brace — never by finding
+  // another way into the district.
+  const maintOpen = walk.find((e) => e.id === "neck_main")?.valid ?? false;
+  const byBrace = state.frame.brace_connected;
+  const byJack = Boolean(state.members.find((m) => m.id === "neck_brace" && m.jacked));
   const shop = shopStanding(state);
   const drive = state.flags.drive_recovered || state.flags.drive_abandoned;
 
@@ -160,12 +157,14 @@ export function evaluateMissions(state: WorldState): ObjectiveStatus[] {
     {
       id: "walk",
       title: "Open a maintenance walk",
-      done: Boolean(maintOpen),
+      done: maintOpen,
       note: maintOpen
-        ? maint
-          ? "A live walk exists by load path — not by deleting a wall."
-          : "Walk is open."
-        : "Change support or load. Gate, brace, jack, or Gallery 12.",
+        ? byBrace
+          ? "The brace is carrying it. The deck is walkable, not repaired."
+          : byJack
+            ? "The jack is holding the alignment. It is taking load, not deleting it."
+            : "Alignment came back when the demand came off. Nothing was rebuilt."
+        : "The transfer deck is out of alignment. Take load off it, brace it, or jack it.",
     },
     {
       id: "shop",
