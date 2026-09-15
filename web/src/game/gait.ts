@@ -56,6 +56,9 @@ export function stepGait(
     lateralSpeed?: number;
     yawRate: number;
     landed: number;
+    supportLean?: number;
+    balance?: number;
+    parkourMode?: "free" | "vault" | "hang" | "pullup";
   },
   settings: Settings,
 ) {
@@ -65,11 +68,14 @@ export function stepGait(
   const shakeK = reduced ? 0 : settings.shake;
   const lateralAccel = sample.lateralAccel ?? 0;
   const lateralSpeed = sample.lateralSpeed ?? 0;
+  const balance = Math.max(0, Math.min(1, sample.balance ?? 0));
+  const supportLean = sample.supportLean ?? 0;
+  const parkour = sample.parkourMode ?? "free";
 
   // Full gait-cycle distance, so cadence emerges from actual traveled speed.
   const stride = sample.sprint ? 2.35 : sample.crouch ? 1.18 : 1.62;
   g.prevPhase = g.phase;
-  if (sample.grounded && sample.speed > 0.24) {
+  if (sample.grounded && sample.speed > 0.24 && parkour === "free") {
     g.phase += (sample.speed / stride) * Math.PI * 2 * dt;
     while (g.phase > Math.PI * 2) g.phase -= Math.PI * 2;
   }
@@ -77,30 +83,52 @@ export function stepGait(
   const crossed =
     (g.prevPhase < Math.PI && g.phase >= Math.PI) ||
     (g.prevPhase > g.phase && g.phase < 0.35);
-  if (sample.grounded && sample.speed > 0.6 && crossed) g.foot = true;
+  if (sample.grounded && sample.speed > 0.6 && crossed && parkour === "free") g.foot = true;
 
   const speedRef = sample.sprint ? 5.6 : sample.crouch ? 1.35 : 2.7;
   const speedK = Math.min(1.15, sample.speed / speedRef);
-  const stepAmp = reduced ? 0 : sample.crouch ? 0.006 : sample.sprint ? 0.024 : 0.015;
-  const stepWidth = reduced ? 0 : sample.crouch ? 0.010 : sample.sprint ? 0.018 : 0.014;
+  const balanceQuiet = 1 - balance * 0.58;
+  const stepAmp = (reduced ? 0 : sample.crouch ? 0.006 : sample.sprint ? 0.024 : 0.015) * balanceQuiet;
+  const stepWidth = (reduced ? 0 : sample.crouch ? 0.010 : sample.sprint ? 0.018 : 0.014) * balanceQuiet;
 
-  const wantV = sample.grounded ? -Math.cos(g.phase * 2) * stepAmp * speedK : 0;
+  let wantV = sample.grounded && parkour === "free" ? -Math.cos(g.phase * 2) * stepAmp * speedK : 0;
   const accelFore = Math.max(-5.5, Math.min(5.5, sample.forwardAccel));
   const accelLat = Math.max(-6.0, Math.min(6.0, lateralAccel));
-  const wantL = sample.grounded
+  let wantL = sample.grounded && parkour === "free"
     ? Math.sin(g.phase) * stepWidth * speedK - accelLat * (reduced ? 0.0004 : 0.0017)
     : 0;
-  const wantFore = sample.grounded
+  let wantFore = sample.grounded && parkour === "free"
     ? Math.sin(g.phase * 2 + Math.PI * 0.5) * stepAmp * 0.24 * speedK
     : 0;
 
   const turnLean = Math.max(-1.4, Math.min(1.4, sample.yawRate));
   const strafeLean = Math.max(-3.0, Math.min(3.0, lateralSpeed));
-  const wantRoll = reduced
+  let wantRoll = reduced
     ? 0
-    : -Math.sin(g.phase) * 0.009 * speedK + turnLean * 0.028 - accelLat * 0.0030 - strafeLean * 0.004;
-  const wantYaw = -sample.yawRate * (reduced ? 0.015 : 0.055);
-  const wantPitch = -accelFore * (reduced ? 0.0025 : 0.0085);
+    : -Math.sin(g.phase) * 0.009 * speedK + turnLean * 0.028 - accelLat * 0.0030 - strafeLean * 0.004 + supportLean;
+  let wantYaw = -sample.yawRate * (reduced ? 0.015 : 0.055);
+  let wantPitch = -accelFore * (reduced ? 0.0025 : 0.0085);
+
+  // Parkour camera movement comes from actual traversal state, not a canned
+  // animation clip. These offsets only embody the body motion around world pose.
+  if (!reduced && parkour !== "free") {
+    const p = Math.sin(g.time * 13.0);
+    if (parkour === "vault") {
+      wantV = 0.025;
+      wantFore = 0.035;
+      wantPitch -= 0.055;
+      wantRoll += p * 0.010;
+    } else if (parkour === "pullup") {
+      wantV = 0.018;
+      wantFore = 0.018;
+      wantPitch -= 0.035;
+    } else if (parkour === "hang") {
+      wantV = -0.020;
+      wantFore = -0.012;
+      wantRoll += p * 0.006;
+      wantYaw *= 0.35;
+    }
+  }
 
   if (sample.landed > 0 && !reduced) {
     g.land = Math.max(g.land, sample.landed);
@@ -115,7 +143,7 @@ export function stepGait(
   g.pitch = damp(g.pitch, wantPitch + (reduced ? 0 : g.land * 0.022), 10, dt);
   g.land = damp(g.land, 0, 7.2, dt);
 
-  const idle = sample.grounded && sample.speed < 0.22 ? 1 : 0;
+  const idle = sample.grounded && sample.speed < 0.22 && parkour === "free" ? 1 : 0;
   const wantBreath = reduced ? 0 : Math.sin(g.time * 1.25) * 0.0035 * idle;
   g.breath = damp(g.breath, wantBreath, 3.4, dt);
 
