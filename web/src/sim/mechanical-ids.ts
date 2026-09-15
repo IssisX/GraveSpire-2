@@ -42,6 +42,15 @@ export const MECH_ID = {
   mc10Flywheel: "mc10_flywheel",
   mc10Governor: "mc10_governor",
   mc10Bridge: "mc10_bridge",
+  mc11WindLatch: "mc11_wind_latch",
+  mc11Sail: "mc11_sail",
+  mc11SkyCar: "mc11_sky_car",
+  mc11Counterweight: "mc11_counterweight",
+  mc11HoistCable: "mc11_hoist_cable",
+  mc12PendulumLatch: "mc12_pendulum_latch",
+  mc12Pendulum: "mc12_pendulum",
+  mc12Ballast: "mc12_ballast",
+  mc12LandingBridge: "mc12_landing_bridge",
 } as const;
 
 export type MechanicalId = (typeof MECH_ID)[keyof typeof MECH_ID];
