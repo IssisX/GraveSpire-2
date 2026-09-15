@@ -8,6 +8,7 @@ import type { Level } from "./level.ts";
 import { carrierWorld } from "./level.ts";
 import { applyRubeCoupling } from "./rube-world.ts";
 import { applyLinkedCascadeCoupling } from "./linked-world.ts";
+import { applySpringShuttleCoupling } from "./spring-shuttle-world.ts";
 import { getSettings } from "./settings.ts";
 
 function lamp(mesh: THREE.Mesh, on: boolean, hot = false) {
@@ -264,6 +265,7 @@ export function applyCoupling(
 
   applyRubeCoupling(level, sim);
   applyLinkedCascadeCoupling(level, sim);
+  applySpringShuttleCoupling(level, sim);
   return pos;
 }
 
