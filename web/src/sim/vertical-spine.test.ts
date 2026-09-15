@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
 import { createRubeState, stepRubeMechanics } from "./rube-mechanics.ts";
 import { ensureLinkedCascadeState } from "./linked-cascade.ts";
 import { mechDof } from "./mechanical-network.ts";
@@ -18,11 +19,11 @@ describe("vertical mechanical skyscraper", () => {
       MECH_ID.mc08Ballast,
       MECH_ID.mc08Helix,
     ]) {
-      expect(chain.network.dofs.some((d) => d.id === id)).toBe(true);
+      assert.ok(chain.network.dofs.some((d) => d.id === id), `missing shared DOF ${id}`);
     }
-    expect(chain.network.cables.some((c) => c.id === MECH_ID.mc07BalanceCable)).toBe(true);
-    expect("mc07_complete" in (r as unknown as Record<string, unknown>)).toBe(false);
-    expect("mc08_complete" in (r as unknown as Record<string, unknown>)).toBe(false);
+    assert.ok(chain.network.cables.some((c) => c.id === MECH_ID.mc07BalanceCable));
+    assert.equal("mc07_complete" in (r as unknown as Record<string, unknown>), false);
+    assert.equal("mc08_complete" in (r as unknown as Record<string, unknown>), false);
   });
 
   it("uses counterweight imbalance to raise the player carrier after release", () => {
@@ -33,8 +34,8 @@ describe("vertical mechanical skyscraper", () => {
     const before = mc07World(chain);
     for (let i = 0; i < 120 * 4; i++) stepRubeMechanics(r, 1 / 120);
     const after = mc07World(chain);
-    expect(after.ascender.y).toBeGreaterThan(before.ascender.y + 0.5);
-    expect(after.countercar.y).toBeLessThan(before.countercar.y - 0.5);
+    assert.ok(after.ascender.y > before.ascender.y + 0.5, "released heavier counter-car must raise ascender");
+    assert.ok(after.countercar.y < before.countercar.y - 0.5, "counter-car must descend under gravity");
   });
 
   it("hands an arriving ascender into the cradle and torsion stack", () => {
@@ -51,7 +52,7 @@ describe("vertical mechanical skyscraper", () => {
     for (let i = 0; i < 120 * 3; i++) stepRubeMechanics(r, 1 / 120);
     const w7 = mc07World(chain);
     const w8 = mc08World(chain);
-    expect(w7.cradle.angle).toBeGreaterThan(VERTICAL.cradleMinRad + 0.05);
-    expect(w8.latch).toBeGreaterThan(0.01);
+    assert.ok(w7.cradle.angle > VERTICAL.cradleMinRad + 0.05, "arriving car must rotate the transfer cradle");
+    assert.ok(w8.latch > 0.01, "cradle rotation must pull the torsion-stage latch");
   });
 });
