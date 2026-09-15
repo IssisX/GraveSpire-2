@@ -1,5 +1,6 @@
 import { G, clamp, type LinkedCascadeState, type MechanicalDofState } from "./types.ts";
 import { addGeneralizedForce, mechDof, type GeneralizedForces } from "./mechanical-network.ts";
+import { MECH_ID } from "./mechanical-ids.ts";
 
 export const SPRING_SHUTTLE = {
   massKg: 12000.0,
@@ -28,13 +29,10 @@ function addDof(chain: LinkedCascadeState, dof: MechanicalDofState): void {
   if (!hasDof(chain, dof.id)) chain.network.dofs.push(dof);
 }
 
-/**
- * MC-04 is persisted in the same generalized-coordinate network as MC-02/MC-03.
- * q for spring_shuttle is downward travel from the upper landing.
- */
+/** MC-04 contributes coordinates to the same network as every upstream mechanism. */
 export function ensureSpringShuttleState(chain: LinkedCascadeState): void {
   addDof(chain, {
-    id: "spring_shuttle_latch",
+    id: MECH_ID.springShuttleLatch,
     kind: "linear",
     q: 0,
     v: 0,
@@ -45,7 +43,7 @@ export function ensureSpringShuttleState(chain: LinkedCascadeState): void {
     stop_restitution: 0,
   });
   addDof(chain, {
-    id: "spring_shuttle",
+    id: MECH_ID.springShuttle,
     kind: "linear",
     q: 0,
     v: 0,
@@ -58,16 +56,14 @@ export function ensureSpringShuttleState(chain: LinkedCascadeState): void {
 }
 
 /**
- * Adds MC-04 forces before the shared network integrator runs.
- * The falling MC-03 bridge nose physically drives a small release follower.
- * Once that follower clears its pawl, gravity starts the 12 t shuttle downward.
- * A preloaded spring stores that gravitational work and returns the shuttle upward.
+ * MC-03 bridge geometry drives the MC-04 release follower through reciprocal force.
+ * No completion state exists: q/v and unilateral contact are the entire handoff.
  */
 export function applySpringShuttleForces(chain: LinkedCascadeState, forces: GeneralizedForces): void {
   ensureSpringShuttleState(chain);
-  const bridge = mechDof(chain.network, "bridge");
-  const latch = mechDof(chain.network, "spring_shuttle_latch");
-  const shuttle = mechDof(chain.network, "spring_shuttle");
+  const bridge = mechDof(chain.network, MECH_ID.bridge);
+  const latch = mechDof(chain.network, MECH_ID.springShuttleLatch);
+  const shuttle = mechDof(chain.network, MECH_ID.springShuttle);
 
   const target = clamp(
     (SPRING_SHUTTLE.releaseAngleRad - bridge.q) * SPRING_SHUTTLE.releaseGainMPerRad,
@@ -80,23 +76,21 @@ export function applySpringShuttleForces(chain: LinkedCascadeState, forces: Gene
   const followerForce =
     SPRING_SHUTTLE.releaseStiffnessNpm * (target - latch.q) +
     SPRING_SHUTTLE.releaseDampingNsPm * (targetRate - latch.v);
-  addGeneralizedForce(forces, "spring_shuttle_latch", followerForce);
+  addGeneralizedForce(forces, MECH_ID.springShuttleLatch, followerForce);
 
-  // Reciprocal low-force reaction on the bridge release contact.
   if (followerForce > 0 && bridge.q < SPRING_SHUTTLE.releaseAngleRad) {
-    addGeneralizedForce(forces, "bridge", followerForce * SPRING_SHUTTLE.releaseGainMPerRad);
+    addGeneralizedForce(forces, MECH_ID.bridge, followerForce * SPRING_SHUTTLE.releaseGainMPerRad);
   }
 
-  // q is downward travel. Gravity drives +q; spring preload/stiffness drive -q.
   const springUpN = SPRING_SHUTTLE.springPreloadN + SPRING_SHUTTLE.springK * shuttle.q;
-  addGeneralizedForce(forces, "spring_shuttle", SPRING_SHUTTLE.massKg * G - springUpN);
+  addGeneralizedForce(forces, MECH_ID.springShuttle, SPRING_SHUTTLE.massKg * G - springUpN);
 }
 
 /** Pawl is unilateral: while its face blocks the guide, the shuttle cannot descend. */
 export function enforceSpringShuttleContact(chain: LinkedCascadeState, beforeQ: number): void {
   ensureSpringShuttleState(chain);
-  const latch = mechDof(chain.network, "spring_shuttle_latch");
-  const shuttle = mechDof(chain.network, "spring_shuttle");
+  const latch = mechDof(chain.network, MECH_ID.springShuttleLatch);
+  const shuttle = mechDof(chain.network, MECH_ID.springShuttle);
   if (beforeQ < SPRING_SHUTTLE.latchEscapeM && latch.q < SPRING_SHUTTLE.latchClearM && shuttle.q > 0) {
     shuttle.q = 0;
     if (shuttle.v > 0) shuttle.v = 0;
@@ -105,7 +99,7 @@ export function enforceSpringShuttleContact(chain: LinkedCascadeState, beforeQ: 
 
 export function springShuttleWorld(chain: LinkedCascadeState): { x: number; y: number; z: number; vy: number } {
   ensureSpringShuttleState(chain);
-  const shuttle = mechDof(chain.network, "spring_shuttle");
+  const shuttle = mechDof(chain.network, MECH_ID.springShuttle);
   return {
     x: SPRING_SHUTTLE.x,
     y: SPRING_SHUTTLE.upperY - shuttle.q,
@@ -116,7 +110,7 @@ export function springShuttleWorld(chain: LinkedCascadeState): { x: number; y: n
 
 export function springShuttleEnergy(chain: LinkedCascadeState): { kineticJ: number; springJ: number; gravitationalJ: number } {
   ensureSpringShuttleState(chain);
-  const shuttle = mechDof(chain.network, "spring_shuttle");
+  const shuttle = mechDof(chain.network, MECH_ID.springShuttle);
   const y = SPRING_SHUTTLE.upperY - shuttle.q;
   return {
     kineticJ: 0.5 * SPRING_SHUTTLE.massKg * shuttle.v * shuttle.v,
