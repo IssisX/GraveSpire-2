@@ -28,6 +28,15 @@ export const MECH_ID = {
   mc06Dropweight: "mc06_dropweight",
   mc06DriveCable: "mc06_drive_cable",
   mc06BrakeHandle: "mc06_brake_handle",
+  mc07BrakeHandle: "mc07_brake_handle",
+  mc07Ascender: "mc07_ascender",
+  mc07Countercar: "mc07_countercar",
+  mc07BalanceCable: "mc07_balance_cable",
+  mc07Cradle: "mc07_cradle",
+  mc08Latch: "mc08_latch",
+  mc08Ring: "mc08_ring",
+  mc08Ballast: "mc08_ballast",
+  mc08Helix: "mc08_helix",
 } as const;
 
 export type MechanicalId = (typeof MECH_ID)[keyof typeof MECH_ID];
