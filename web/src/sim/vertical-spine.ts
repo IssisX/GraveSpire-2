@@ -50,11 +50,13 @@ export const VERTICAL = {
   ballastStartM: 4.0,
   ballastDampingNsPm: 1.2e4,
   latchMaxM: 0.28,
-  latchClearM: 0.12,
-  latchReleaseAngleRad: 0.24,
-  latchGainMPerRad: 1.6,
-  latchK: 9.0e4,
-  latchC: 8.0e3,
+  latchClearM: 0.07,
+  latchOverCenterM: 0.045,
+  latchReleaseAngleRad: -0.04,
+  latchGainMPerRad: 2.4,
+  latchK: 1.8e5,
+  latchC: 1.2e4,
+  latchDetentK: 8.0e4,
   helixMassKg: 30000.0,
   helixTravelM: 18.0,
   helixPitchMPerRad: 4.2,
@@ -83,7 +85,7 @@ export function ensureVerticalSpineState(chain: LinkedCascadeState): void {
     max_q: VERTICAL.cradleMaxRad,
     stop_restitution: 0.02,
   });
-  addDof(chain, { id: MECH_ID.mc08Latch, kind: "linear", q: 0, v: 0, inertia_si: 60, damping_si: 420, min_q: 0, max_q: VERTICAL.latchMaxM, stop_restitution: 0 });
+  addDof(chain, { id: MECH_ID.mc08Latch, kind: "linear", q: 0, v: 0, inertia_si: 18, damping_si: 260, min_q: 0, max_q: VERTICAL.latchMaxM, stop_restitution: 0 });
   addDof(chain, { id: MECH_ID.mc08Ring, kind: "rotary", q: 0, v: 0, inertia_si: VERTICAL.ringBaseInertiaKgm2 + VERTICAL.ballastMassKg * VERTICAL.ballastStartM ** 2, damping_si: VERTICAL.ringDampingNms, min_q: 0, max_q: VERTICAL.ringMaxRad, stop_restitution: 0.03 });
   addDof(chain, { id: MECH_ID.mc08Ballast, kind: "linear", q: VERTICAL.ballastStartM, v: 0, inertia_si: VERTICAL.ballastMassKg, damping_si: VERTICAL.ballastDampingNsPm, min_q: VERTICAL.ballastMinM, max_q: VERTICAL.ballastMaxM, stop_restitution: 0.05 });
   addDof(chain, { id: MECH_ID.mc08Helix, kind: "linear", q: 0, v: 0, inertia_si: VERTICAL.helixMassKg, damping_si: 1.8e4, min_q: 0, max_q: VERTICAL.helixTravelM, stop_restitution: 0.03 });
@@ -120,7 +122,6 @@ export function applyVerticalSpineForces(chain: LinkedCascadeState, forces: Gene
   const radial = mechDof(net, MECH_ID.mc06Bridge);
   const brake = mechDof(net, MECH_ID.mc07BrakeHandle);
   const asc = mechDof(net, MECH_ID.mc07Ascender);
-  const counter = mechDof(net, MECH_ID.mc07Countercar);
   const cradle = mechDof(net, MECH_ID.mc07Cradle);
   const latch = mechDof(net, MECH_ID.mc08Latch);
   const ring = mechDof(net, MECH_ID.mc08Ring);
@@ -167,11 +168,14 @@ export function applyVerticalSpineForces(chain: LinkedCascadeState, forces: Gene
   const counterbalanceGravity = VERTICAL.cradleCounterMassKg * G * VERTICAL.cradleCounterArmM * Math.cos(cradle.q);
   addGeneralizedForce(forces, MECH_ID.mc07Cradle, cradleGravity + counterbalanceGravity);
 
+  // The cradle pulls a light over-center latch. Once past center, geometry keeps it released.
   const latchTarget = clamp((cradle.q - VERTICAL.latchReleaseAngleRad) * VERTICAL.latchGainMPerRad, 0, VERTICAL.latchMaxM);
   const latchTargetV = cradle.q > VERTICAL.latchReleaseAngleRad ? cradle.v * VERTICAL.latchGainMPerRad : 0;
   const latchForce = VERTICAL.latchK * (latchTarget - latch.q) + VERTICAL.latchC * (latchTargetV - latch.v);
   addGeneralizedForce(forces, MECH_ID.mc08Latch, latchForce);
   if (latchForce > 0) addGeneralizedForce(forces, MECH_ID.mc07Cradle, -latchForce * VERTICAL.latchGainMPerRad);
+  const latchDetentTarget = latch.q >= VERTICAL.latchOverCenterM ? VERTICAL.latchMaxM : 0;
+  addGeneralizedForce(forces, MECH_ID.mc08Latch, VERTICAL.latchDetentK * (latchDetentTarget - latch.q));
 
   ring.inertia_si = VERTICAL.ringBaseInertiaKgm2 + VERTICAL.ballastMassKg * ballast.q * ballast.q;
   addGeneralizedForce(forces, MECH_ID.mc08Ring,
