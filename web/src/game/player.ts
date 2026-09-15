@@ -12,6 +12,19 @@ const EYE_CROUCH = 0.96;
 const CAP_R = 0.32;
 const CAP_H = 1.72;
 const CAP_H_CROUCH = 1.05;
+const CHUTE_DESCENT = -6.1;
+const CHUTE_GLIDE = 6.4;
+
+const FALL_BARKS = [
+  "OH SHIT—THAT IS A LOT OF BUILDING!",
+  "WHY THE HELL IS THE FLOOR STILL GETTING FARTHER AWAY?!",
+  "PARACHUTE! PARACHUTE! ANY TIME THIS CENTURY!",
+  "I CAN SEE THE ENTIRE DAMN SHIFT FROM UP HERE!",
+  "THIS WAS NOT IN THE SAFETY BRIEF!",
+  "FUCK—STEER, STEER, STEER!",
+  "WHO BUILDS A SIXTY-METER HOLE THROUGH EVERY FLOOR?!",
+  "NOTE TO SELF: GRAVITY REMAINS OPERATIONAL!",
+] as const;
 
 export class Player {
   x = 5.6;
@@ -39,6 +52,10 @@ export class Player {
   landed = 0;
   sprinting = false;
   jumpBuffered = 0;
+  parachuteDeployed = false;
+  chuteUsedThisFall = false;
+  private barkClock = 0;
+  private barkIndex = 0;
 
   forward(): { x: number; z: number } {
     return { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) };
@@ -72,8 +89,38 @@ export class Player {
     return false;
   }
 
+  private fearBark(force = false) {
+    if (!force && this.barkClock > 0) return;
+    const line = FALL_BARKS[this.barkIndex % FALL_BARKS.length]!;
+    this.barkIndex += 1;
+    this.barkClock = 1.55 + (this.barkIndex % 3) * 0.32;
+    try {
+      window.dispatchEvent(new CustomEvent("gravespire-fall-bark", { detail: line }));
+      if ("speechSynthesis" in window && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(line);
+        u.rate = 1.18;
+        u.pitch = 0.82 + (this.barkIndex % 3) * 0.08;
+        u.volume = 0.86;
+        window.speechSynthesis.speak(u);
+      }
+    } catch {
+      /* Voice support is optional; fall physics is not. */
+    }
+  }
+
+  private deployParachute() {
+    if (this.parachuteDeployed || this.grounded || this.airTime < 0.55 || this.vy > -4.5) return false;
+    this.parachuteDeployed = true;
+    this.chuteUsedThisFall = true;
+    this.vy = Math.max(this.vy, -11.0);
+    this.fearBark(true);
+    return true;
+  }
+
   step(dt: number, actions: Actions, colliders: Collider[], platformDelta?: { x: number; y: number; z: number }) {
     this.landed = 0;
+    this.barkClock = Math.max(0, this.barkClock - dt);
     if (this.mantleTo && this.mantleT > 0) {
       this.mantleT -= dt;
       const u = Math.max(0, this.mantleT) / 0.32;
@@ -103,13 +150,13 @@ export class Player {
     const r = this.right();
     const mag = Math.hypot(actions.moveX, actions.moveY);
     this.sprinting = Boolean(!this.crouch && this.grounded && (actions.sprint || (actions.autoSprint && mag > 0.86)));
-    const maxSp = this.crouch ? CROUCH : this.sprinting ? SPRINT : WALK;
+    const maxSp = this.crouch ? CROUCH : this.sprinting ? SPRINT : this.parachuteDeployed ? CHUTE_GLIDE : WALK;
     const wishX = f.x * actions.moveY + r.x * actions.moveX;
     const wishZ = f.z * actions.moveY + r.z * actions.moveX;
     const wishLen = Math.hypot(wishX, wishZ);
     const nx = wishLen > 0 ? wishX / wishLen : 0;
     const nz = wishLen > 0 ? wishZ / wishLen : 0;
-    const accel = this.grounded ? 18 : 4.5;
+    const accel = this.grounded ? 18 : this.parachuteDeployed ? 3.4 : 4.5;
     const targetVx = nx * maxSp;
     const targetVz = nz * maxSp;
     const pvX = this.vx;
@@ -125,11 +172,20 @@ export class Player {
       this.coyote = COYOTE;
       this.airTime = 0;
       this.fallFrom = this.y;
+      this.parachuteDeployed = false;
     } else {
       this.coyote -= dt;
       this.airTime += dt;
       this.vy -= GRAVITY * dt;
+      if (this.parachuteDeployed) {
+        this.vy += (CHUTE_DESCENT - this.vy) * Math.min(1, 2.8 * dt);
+        if (this.vy < -9 && this.airTime > 1.0) this.fearBark();
+      } else if (this.vy < -11 && this.airTime > 1.0) {
+        this.fearBark();
+      }
     }
+
+    if (actions.jumpPressed && !this.grounded) this.deployParachute();
 
     if (this.jumpBuffered > 0) this.jumpBuffered -= dt;
     const wantJump = actions.jumpPressed || this.jumpBuffered > 0;
@@ -138,7 +194,7 @@ export class Player {
       this.grounded = false;
       this.coyote = 0;
       this.jumpBuffered = 0;
-    } else if (wantJump && !this.grounded) {
+    } else if (wantJump && !this.grounded && !this.parachuteDeployed) {
       if (this.tryMantle(colliders)) {
         this.jumpBuffered = 0;
         return;
@@ -197,18 +253,25 @@ export class Player {
     if (!wasGround && this.grounded) {
       const drop = this.fallFrom - this.y;
       this.landed = Math.max(0, Math.min(1, (drop - 0.35) / 4.2));
+      this.parachuteDeployed = false;
     }
 
     this.speed = Math.hypot(this.vx, this.vz);
   }
 
   fallDamage(): "none" | "hurt" | "dead" {
-    if (this.y < -6) return "dead";
+    // The tower is intentionally vertically traversable in both directions.
+    // Falling past one floor is not an automatic death/reset anymore.
+    if (this.y < -80) return "dead";
     if (this.grounded && this.airTime > 0.05) {
       const drop = this.fallFrom - this.y;
       this.airTime = 0;
-      if (drop > 8.5) return "dead";
-      if (drop > 4.8) return "hurt";
+      if (this.chuteUsedThisFall) {
+        this.chuteUsedThisFall = false;
+        return drop > 55 ? "hurt" : "none";
+      }
+      if (drop > 12.5) return "dead";
+      if (drop > 5.8) return "hurt";
     }
     return "none";
   }
