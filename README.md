@@ -44,3 +44,19 @@ Open `game/project.godot` with Godot 4.7.2.
 The C++ core owns consequential simulation state and committed outcomes.
 Godot scripts issue commands and render snapshots. Presentation cannot decide
 that a structure broke, a machine succeeded, or a route became valid.
+
+## Grok branch — Act I Android APK
+
+`main` stays the Godot 4.7 + C++ coupling cell. This **Grok** branch keeps that
+tree and adds a playable Act I debug APK:
+
+- `web/` — TypeScript authority + Three.js first-person bay (touch-first)
+- `android/` — WebView wrapper (WebViewAssetLoader, fold/unfold safe)
+- `.github/workflows/android-apk.yml` — builds the APK and publishes
+  the `grok-act1-apk` prerelease
+
+Install: open https://github.com/IssisX/GraveSpire-2/releases/tag/grok-act1-apk
+and tap `gravespire-act1-debug.apk`. Allow unknown sources if Android asks.
+
+This APK is **not** GDD §7/§16 co-rotational completeness, and it is **not**
+the Godot mobile export.

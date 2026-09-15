@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="gs_void">#08090B</color>
+    <color name="gs_bone">#C8CCD4</color>
+    <color name="gs_steel">#8B9198</color>
+    <color name="gs_rust">#6B3A28</color>
+</resources>

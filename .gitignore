@@ -6,3 +6,15 @@ build/
 godot-cpp/
 *.o
 
+# Grok branch — Act I web / Android
+web/node_modules/
+web/dist/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+*.apk
+*.ap_
+dist-apk/

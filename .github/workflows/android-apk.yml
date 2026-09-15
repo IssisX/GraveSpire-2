@@ -1,0 +1,88 @@
+name: android-apk
+
+on:
+  push:
+    branches: [Grok]
+  workflow_dispatch:
+
+concurrency:
+  group: android-apk-grok
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  apk:
+    name: Assemble Act I debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build Act I web
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Stage web into Android assets
+        run: |
+          rm -rf android/app/src/main/assets/www
+          mkdir -p android/app/src/main/assets/www
+          cp -a web/dist/. android/app/src/main/assets/www/
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Assemble debug APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon
+
+      - name: Name APK
+        run: |
+          mkdir -p dist-apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist-apk/gravespire-act1-debug.apk
+          ls -lh dist-apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gravespire-act1-debug
+          path: dist-apk/gravespire-act1-debug.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: grok-act1-apk
+          name: GRAVESPIRE Act I — debug APK
+          body: |
+            Debug APK for the Fold (Grok branch).
+
+            1. Tap the APK below.
+            2. Allow install from GitHub if Android asks.
+            3. Left thumb walks, right thumb looks, Use on what you face.
+
+            This is Act I as a WebView around the TypeScript/Three.js bay — not the Godot/C++ cell on main, not Unreal, not GDD §16 completeness.
+          prerelease: true
+          make_latest: false
+          files: dist-apk/gravespire-act1-debug.apk
+          target_commitish: Grok
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
