@@ -759,11 +759,26 @@ export function stepBodies(
   // purposes: a lever's far end must not freeze mid-swing just because it
   // alone was under the sleep threshold. A fixed anchor (null bodyId) never
   // forces a wake and is never woken -- it has no state to wake.
-  for (const j of joints) {
-    const ab = resolveAnchorBody(byId, j.a.bodyId);
-    const bb = resolveAnchorBody(byId, j.b.bodyId);
-    if (ab && !ab.sleeping && bb?.sleeping) { bb.sleeping = false; bb.restT = 0; }
-    if (bb && !bb.sleeping && ab?.sleeping) { ab.sleeping = false; ab.restT = 0; }
+  //
+  // Run to a fixed point, not one pass: a single forward pass only
+  // propagates a wake in array order (A-B before B-C wakes C when A wakes
+  // B; the reverse order leaves C asleep for this tick). A joint whose far
+  // side is still asleep when the solver reaches it gets treated as fully
+  // movable anyway (see jointSettled below, which only skips a joint once
+  // BOTH sides are asleep) -- the impulse lands on a body whose position
+  // integration is skipped this tick, corrupting its velocity silently
+  // until next tick's propagation finally flips it awake and that stale
+  // velocity integrates all at once as a one-frame snap. Bounded by
+  // joints.length passes: that is the longest a straight chain could need.
+  for (let pass = 0; pass < joints.length; pass++) {
+    let changed = false;
+    for (const j of joints) {
+      const ab = resolveAnchorBody(byId, j.a.bodyId);
+      const bb = resolveAnchorBody(byId, j.b.bodyId);
+      if (ab && !ab.sleeping && bb?.sleeping) { bb.sleeping = false; bb.restT = 0; changed = true; }
+      if (bb && !bb.sleeping && ab?.sleeping) { ab.sleeping = false; ab.restT = 0; changed = true; }
+    }
+    if (!changed) break;
   }
 
   // ---- integrate velocities ----------------------------------------------

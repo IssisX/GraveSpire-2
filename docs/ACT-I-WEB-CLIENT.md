@@ -324,7 +324,7 @@ what a player can see, and every one of them can fail:
 ## Verified here
 
 - `npm run typecheck` — clean.
-- `npm test` — 91/91 authority reference checks.
+- `npm test` — 93/93 authority reference checks.
 - `npm run build` — production bundle emitted.
 - `make test` — native C++ reference cases still pass, unchanged.
 - Headless Chromium against the production build: boot → menu → settings →
@@ -351,6 +351,37 @@ what a player can see, and every one of them can fail:
   settled the plank at `z ≈ 0`, spanning the well's ±3.42 m edges; the
   player's own `moveCapsule`, unmodified, reports `grounded: true,
   groundedId: "plank_well"` standing on it.
+- Headless Chromium against the production build, the counterweight lever
+  end to end: renders level at rest with the context system correctly
+  offering "Counterweight lever" at range; dropping `crate_a` on the +x end
+  through real `sim.advanceAuthorityTick()` calls against the live level's
+  full static geometry produces the identical settled state as the isolated
+  authority test (`crate_a` at `x=25.746, y=0.272` in both, bit for bit);
+  screenshots confirm the beam visibly tilted with the crate resting on the
+  low end; the player's own `moveCapsule`, unmodified, reports `grounded:
+  true, groundedId: "lever_beam"` standing on the raised end. (First attempt
+  at this check killed the player — a test-script camera pose at `z=-12`
+  put them 0.5 m past floor_sw's south edge with nothing underneath; not a
+  game bug, but as reliable a way as any to confirm death and fall-through
+  are, in fact, real.)
+
+## Reviewed and fixed after the fact
+
+A code review of the joint solver caught a real defect the shipped lever
+never exercises (its far side is a fixed anchor, not a body) but the
+documented next steps — a counterweight lift, a winch — would have hit
+immediately: joint wake propagation was a single forward pass over the
+joints array, so waking body A could wake B (if the A–B joint appears
+first) without that same pass then waking C on the B–C joint, if B–C
+happened to appear earlier in the array. `jointSettled` only requires one
+side awake to keep a joint solving, so the still-asleep far body received a
+real velocity impulse anyway — corrupted while its position integration
+stayed frozen (skipped for sleeping bodies) — and only surfaced as a
+one-frame teleport once the next tick's pass finally marked it awake and
+that stale velocity integrated all at once. Fixed by running wake
+propagation to a fixed point (bounded by `joints.length` passes) instead of
+one pass; a permanent regression test reproduces the exact failing array
+order. 93/93 tests.
 
 ## Sibling branches surveyed, nothing adopted
 
@@ -375,9 +406,3 @@ that overlaps this pass's work.
 - APK install and WebView behaviour on a physical device.
 - Fold/unfold ergonomics in hand.
 - Rendered image quality on a real GPU. The headless runs use SwiftShader.
-- The lever obstacle's render/walk path in a live browser specifically. It
-  goes through the exact same generic mesh-sync (`bodyMeshes.sync`) and
-  collider-sync code the well-bridging pass already verified live in Chromium
-  for a resting body's quaternion and AABB — nothing about a joint-driven
-  body is different there, it is still just a `BodyState` — but that
-  specific combination was not re-driven through a browser this pass.

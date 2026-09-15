@@ -722,6 +722,55 @@ group("joints: pivots, ropes, and pulleys");
 }
 
 // ---------------------------------------------------------------------------
+// DEFECT (found in code review, before this test existed): wake propagation
+// through a chain of joints was a single forward pass over the joints array.
+// A-B before B-C in that array correctly propagated a wake from A through to
+// C; the reverse order left C asleep for the whole tick even though B had
+// just woken. jointSettled only requires ONE side awake to keep a joint
+// active, so the solver applied a real impulse to still-sleeping C anyway --
+// its velocity changed but its position integration stayed frozen (skipped
+// for sleeping bodies), and the stale velocity only surfaced as a one-frame
+// teleport once the next tick's pass finally marked it awake. Root cause was
+// incomplete propagation, not the solver itself, so the fix is a fixed-point
+// pass over the joints array (bounded by joints.length, cheap at the joint
+// counts this game has), not a guard inside the solver.
+group("joint wake propagates through a chain in one tick, any array order");
+{
+  const a = makeBody({ id: "chain_a", name: "a", material: "steel", size: [0.4, 0.4, 0.4], mass_kg: 20, at: [0, 10, 0] });
+  const b = makeBody({ id: "chain_b", name: "b", material: "steel", size: [0.4, 0.4, 0.4], mass_kg: 20, at: [0, 8, 0] });
+  const c = makeBody({ id: "chain_c", name: "c", material: "steel", size: [0.4, 0.4, 0.4], mass_kg: 20, at: [0, 6, 0] });
+  a.sleeping = false;
+  b.sleeping = true; b.restT = 999;
+  c.sleeping = true; c.restT = 999;
+  a.vy = 3; // a real disturbance to propagate, not a no-op wake
+  const bc: DistanceJoint = {
+    id: "bc", kind: "distance", force_n: 0, jAcc: 0,
+    a: { bodyId: b.id, point: [0, 0, 0] }, b: { bodyId: c.id, point: [0, 0, 0] },
+    restLength: 2.0, mode: "rod",
+  };
+  const ab: DistanceJoint = {
+    id: "ab", kind: "distance", force_n: 0, jAcc: 0,
+    a: { bodyId: a.id, point: [0, 0, 0] }, b: { bodyId: b.id, point: [0, 0, 0] },
+    restLength: 2.0, mode: "rod",
+  };
+  // Deliberately the array order that breaks a single forward pass: the
+  // b-c link appears before the a-b link that is what actually wakes b.
+  const joints = [bc, ab];
+  const r = new Map<string, number>();
+  let maxAbsVy = 0;
+  for (let i = 0; i < 30; i++) {
+    stepBodies([a, b, c], [], 1 / 120, r, joints);
+    maxAbsVy = Math.max(maxAbsVy, Math.abs(b.vy), Math.abs(c.vy));
+  }
+  check("both chained bodies wake within the same tick the disturbance reaches them", !b.sleeping && !c.sleeping);
+  check(
+    "no corrupted-while-frozen velocity spike from incomplete propagation",
+    maxAbsVy < 20,
+    `max |vy| on the chain = ${maxAbsVy.toFixed(2)} m/s (real accelerations here stay well under this)`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 group("the counterweight lever is a real obstacle, not a scripted one");
 {
   const sim = new Simulation();
