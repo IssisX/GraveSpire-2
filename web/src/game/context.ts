@@ -24,6 +24,9 @@ export type CtxCommit =
   | "wedge"
   | "reroute"
   | "clear-sling"
+  | "cascade-push-out"
+  | "cascade-push-in"
+  | "cascade-latch"
   | "exit-operate"
   | "jump"
   | "mantle";
@@ -76,6 +79,11 @@ const ACTION_RANGE: Record<string, number> = {
   member: 2.7,
   drive: 2.55,
   dock: 3.1,
+  cascade_ballast: 2.65,
+  cascade_latch: 2.45,
+  cascade_lever: 3.0,
+  cascade_lift: 3.1,
+  cascade_pulley: 3.0,
   machine: 3.0,
   world: 3.0,
 };
@@ -103,6 +111,8 @@ function losBlocked(
     for (const c of colliders) {
       if (c.disabled || ignore.has(c.id)) continue;
       if (c.id === "rail" || c.id.startsWith("stair")) continue;
+      // These are the mechanism surfaces themselves; surrounding hall geometry still occludes.
+      if (c.id.startsWith("cascade_lever_") || c.id === "cascade_ballast_body" || c.id === "cascade_lift_platform") continue;
       if (x > c.minx && x < c.maxx && y > c.miny && y < c.maxy && z > c.minz && z < c.maxz) return true;
     }
   }
@@ -115,6 +125,10 @@ function score(dist: number, maxd: number, align: number, sticky: boolean): numb
 }
 
 export function worldWarning(state: WorldState): string | null {
+  const rube = state.rube;
+  if (rube && rube.rope.tension_n > rube.rope.rated_tension_n * 0.9) {
+    return "MC-01 transfer rope is above 90% rated tension.";
+  }
   if (state.freight.brake_temperature_k > 420) return "Brake is cooking. Heat is friction.";
   if (state.gate.wedged) return "G-07 is wedged. The leaf will not take a clean command.";
   if (Math.abs(state.gate.seal_misalignment_m) > 0.028 && state.gate.angle_rad < 0.4) {
@@ -225,7 +239,43 @@ export function resolveContext(args: {
     const dist = actionHit.dist;
     const s = args.state;
 
-    if (it.kind === "npc" && DIALOGUE[it.id]) {
+    if (it.id === "cascade_ballast" && s.rube) {
+      if (s.rube.ballast.s_m < 3.62) {
+        push({
+          id: "cascade:push-out",
+          verb: "Shove",
+          noun: "ballast outboard",
+          targetId: it.id,
+          kind: "machine",
+          commit: "cascade-push-out",
+          dist,
+          priority: 86,
+        });
+      }
+      if (s.rube.ballast.s_m > -3.62) {
+        push({
+          id: "cascade:push-in",
+          verb: "Shove",
+          noun: "ballast inboard",
+          targetId: it.id,
+          kind: "machine",
+          commit: "cascade-push-in",
+          dist,
+          priority: 62,
+        });
+      }
+    } else if (it.id === "cascade_latch" && s.rube) {
+      push({
+        id: "cascade:latch",
+        verb: s.rube.lever.latch_engaged ? "Release" : "Catch",
+        noun: "pivot latch",
+        targetId: it.id,
+        kind: "machine",
+        commit: "cascade-latch",
+        dist,
+        priority: 84,
+      });
+    } else if (it.kind === "npc" && DIALOGUE[it.id]) {
       push({
         id: `talk:${it.id}`,
         verb: "Talk to",
@@ -635,6 +685,18 @@ export function commitAction(action: CtxAction, bag: CommitBag): void {
     case "clear-sling":
       bag.flash(bag.sim.act({ type: "clear_sling" }));
       bag.setSlingA(null);
+      bag.audio.clank();
+      return;
+    case "cascade-push-out":
+      bag.flash(bag.sim.act({ type: "rube_push_ballast", direction: 1 }));
+      bag.audio.clank();
+      return;
+    case "cascade-push-in":
+      bag.flash(bag.sim.act({ type: "rube_push_ballast", direction: -1 }));
+      bag.audio.clank();
+      return;
+    case "cascade-latch":
+      bag.flash(bag.sim.act({ type: "rube_toggle_latch" }));
       bag.audio.clank();
       return;
     case "jump":
