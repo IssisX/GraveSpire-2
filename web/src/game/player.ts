@@ -43,8 +43,8 @@ const RECOVERY_BARKS = [
 ] as const;
 
 type TraverseMode = "free" | "vault" | "hang" | "pullup";
-
 type Vec3 = { x: number; y: number; z: number };
+type ContactImpulse = (colliderId: string, impulseXNs: number, impulseZNs: number) => void;
 
 function moveToward2D(vx: number, vz: number, tx: number, tz: number, maxDelta: number): { x: number; z: number } {
   const dx = tx - vx;
@@ -348,8 +348,6 @@ export class Player {
       return;
     }
     const wind = highAltitudeWindMps(height);
-    // Same deterministic prevailing state as MC-11. Direction is fixed by the
-    // exposed crown orientation; only magnitude varies with the shared model.
     const wx = wind * 0.84;
     const wz = -wind * 0.54;
     const mag = Math.hypot(wx, wz) || 1;
@@ -362,7 +360,13 @@ export class Player {
     this.vz += (wz / mag) * accel * dt;
   }
 
-  step(dt: number, actions: Actions, colliders: Collider[], platformDelta?: { x: number; y: number; z: number }) {
+  step(
+    dt: number,
+    actions: Actions,
+    colliders: Collider[],
+    platformDelta?: { x: number; y: number; z: number },
+    onContactImpulse?: ContactImpulse,
+  ) {
     this.landed = 0;
     this.barkClock = Math.max(0, this.barkClock - dt);
     this.applyLook(actions.lookX, actions.lookY, actions.lookSens, actions.invertY);
@@ -384,8 +388,6 @@ export class Player {
     const supportNow = this.currentSupport(colliders);
     this.updateBalance(dt, supportNow.col, supportNow.velocity);
 
-    // Connected parkour input: crouch+jump at an edge means controlled drop;
-    // forward+jump against geometry means step/vault instead of a dead collision.
     if (this.grounded && actions.jumpPressed && actions.crouch) {
       const drop = probeControlledDrop({
         x: this.x, y: this.y, z: this.z, fx: f.x, fz: f.z,
@@ -477,7 +479,6 @@ export class Player {
     if (this.jumpBuffered > 0) this.jumpBuffered -= dt;
     const wantJump = actions.jumpPressed || this.jumpBuffered > 0;
     if (wantJump && this.coyote > 0) {
-      // Departing a moving/rotating support inherits its actual world velocity.
       this.vx += supportNow.velocity.x;
       this.vy = JUMP_V + Math.max(-0.5, supportNow.velocity.y);
       this.vz += supportNow.velocity.z;
@@ -499,6 +500,7 @@ export class Player {
     const supportV = this.grounded ? supportNow.velocity : { x: 0, y: 0, z: 0 };
     const steps = Math.max(1, Math.ceil((Math.hypot(this.vx + supportV.x, this.vy + supportV.y, this.vz + supportV.z) * dt) / 0.18));
     const sdt = dt / steps;
+    const pushed = new Set<string>();
     for (let i = 0; i < steps; i++) {
       const res = moveCapsule(
         { x: this.x, y: this.y, z: this.z, r: CAP_R, h: wantH },
@@ -507,6 +509,17 @@ export class Player {
         (this.vz + supportV.z) * sdt,
         colliders,
       );
+      if (onContactImpulse) {
+        for (const id of res.sideHits) {
+          if (pushed.has(id) || !id.startsWith("ingredient:")) continue;
+          pushed.add(id);
+          onContactImpulse(
+            id,
+            (this.vx + supportV.x) * PLAYER_MASS_KG * 0.62,
+            (this.vz + supportV.z) * PLAYER_MASS_KG * 0.62,
+          );
+        }
+      }
       this.x = res.x;
       this.y = res.y;
       this.z = res.z;
