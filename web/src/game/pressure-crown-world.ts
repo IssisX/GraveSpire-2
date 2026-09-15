@@ -5,6 +5,7 @@ import { mc09World, mc10World, PRESSURE_CROWN } from "@/sim/pressure-crown.ts";
 import type { Collider } from "./collision.ts";
 import type { Interactable, Level } from "./level.ts";
 import { makeSignTexture } from "./materials.ts";
+import { applySkyWorldCoupling } from "./sky-world.ts";
 
 type PressureBindings = {
   root: THREE.Group;
@@ -31,35 +32,13 @@ function geo<T extends THREE.BufferGeometry>(level: Level, g: T): T {
   return g;
 }
 
-function addBox(
-  level: Level,
-  root: THREE.Object3D,
-  w: number,
-  h: number,
-  d: number,
-  x: number,
-  y: number,
-  z: number,
-  mat: THREE.Material,
-  id?: string,
-  collider = true,
-): THREE.Mesh {
+function addBox(level: Level, root: THREE.Object3D, w: number, h: number, d: number, x: number, y: number, z: number, mat: THREE.Material, id?: string, collider = true): THREE.Mesh {
   const m = new THREE.Mesh(geo(level, new THREE.BoxGeometry(w, h, d)), mat);
   m.position.set(x, y, z);
   m.castShadow = true;
   m.receiveShadow = true;
   root.add(m);
-  if (collider) {
-    level.colliders.push({
-      id: id ?? "pressure_crown_static",
-      minx: x - w / 2,
-      maxx: x + w / 2,
-      miny: y - h / 2,
-      maxy: y + h / 2,
-      minz: z - d / 2,
-      maxz: z + d / 2,
-    });
-  }
+  if (collider) level.colliders.push({ id: id ?? "pressure_crown_static", minx: x - w / 2, maxx: x + w / 2, miny: y - h / 2, maxy: y + h / 2, minz: z - d / 2, maxz: z + d / 2 });
   return m;
 }
 
@@ -76,21 +55,13 @@ function ensureWorld(level: Level): PressureBindings {
   root.name = "mc09-10-pressure-crown";
   scene.add(root);
 
-  const sign09Mat = new THREE.MeshStandardMaterial({
-    map: makeSignTexture("MC-09", "PRESSURE ASCENDER  ·  80 t RAM / GAS WORK"),
-    metalness: 0.15,
-    roughness: 0.65,
-  });
+  const sign09Mat = new THREE.MeshStandardMaterial({ map: makeSignTexture("MC-09", "PRESSURE ASCENDER  ·  80 t RAM / GAS WORK"), metalness: 0.15, roughness: 0.65 });
   const sign09 = new THREE.Mesh(geo(level, new THREE.PlaneGeometry(8.6, 1.8)), sign09Mat);
   sign09.position.set(207.0, 72.4, PRESSURE_CROWN.z + 2.6);
   root.add(sign09);
 
-  // Two enormous accumulators make the pressure source visually legible.
   for (const x of [203.2, 212.8]) {
-    const tank = new THREE.Mesh(
-      geo(level, new THREE.CylinderGeometry(1.65, 1.65, 9.5, 20)),
-      mats.steelDark,
-    );
+    const tank = new THREE.Mesh(geo(level, new THREE.CylinderGeometry(1.65, 1.65, 9.5, 20)), mats.steelDark);
     tank.position.set(x, 73.7, PRESSURE_CROWN.z - 3.2);
     tank.castShadow = true;
     root.add(tank);
@@ -112,11 +83,9 @@ function ensureWorld(level: Level): PressureBindings {
     ram.add(rail);
   }
   root.add(ram);
-
   const ramCol: Collider = { id: "mc09_pressure_ram", minx: 0, maxx: 0, miny: 0, maxy: 0, minz: 0, maxz: 0 };
   level.colliders.push(ramCol);
 
-  // Exposed spool/follower that the top of MC-08 physically strokes.
   const valve = new THREE.Group();
   valve.position.set(202.7, 69.6, PRESSURE_CROWN.z + 2.5);
   const valveStem = new THREE.Mesh(geo(level, new THREE.BoxGeometry(1.8, 0.22, 0.22)), mats.hazard);
@@ -125,17 +94,12 @@ function ensureWorld(level: Level): PressureBindings {
   valve.add(valveStem, valveBody);
   root.add(valve);
 
-  // Open structural mast emphasizes that this is still the same vertical void.
   for (const x of [202.5, 213.5]) {
     addBox(level, root, 0.34, 25.0, 0.34, x, 80.0, PRESSURE_CROWN.z + 2.5, mats.steelDark, undefined, false);
     addBox(level, root, 0.34, 25.0, 0.34, x, 80.0, PRESSURE_CROWN.z - 2.5, mats.steelDark, undefined, false);
   }
 
-  const sign10Mat = new THREE.MeshStandardMaterial({
-    map: makeSignTexture("MC-10", "CENTRIFUGAL CROWN  ·  FLYWHEEL / GOVERNOR / TRANSFER SPAN"),
-    metalness: 0.15,
-    roughness: 0.65,
-  });
+  const sign10Mat = new THREE.MeshStandardMaterial({ map: makeSignTexture("MC-10", "CENTRIFUGAL CROWN  ·  FLYWHEEL / GOVERNOR / TRANSFER SPAN"), metalness: 0.15, roughness: 0.65 });
   const sign10 = new THREE.Mesh(geo(level, new THREE.PlaneGeometry(9.2, 1.8)), sign10Mat);
   sign10.position.set(229.0, 96.0, PRESSURE_CROWN.z + 2.7);
   root.add(sign10);
@@ -159,7 +123,6 @@ function ensureWorld(level: Level): PressureBindings {
     governorWeights.push(w);
   }
 
-  // The bridge grows westward from the crown hub toward the arriving ram.
   const bridge = new THREE.Group();
   bridge.position.set(PRESSURE_CROWN.crownX, PRESSURE_CROWN.crownY, PRESSURE_CROWN.z);
   const bridgeDeck = new THREE.Mesh(geo(level, new THREE.BoxGeometry(1, 0.36, 4.2)), mats.grating);
@@ -168,7 +131,6 @@ function ensureWorld(level: Level): PressureBindings {
   const bridgeCol: Collider = { id: "mc10_governor_bridge", minx: 0, maxx: 0, miny: 0, maxy: 0, minz: 0, maxz: 0 };
   level.colliders.push(bridgeCol);
 
-  // Crown landing continues the tower upward/forward without enclosing the void.
   addBox(level, root, 14.0, 0.30, 5.2, 236.0, PRESSURE_CROWN.crownY - 0.15, PRESSURE_CROWN.z, mats.grating, "mc10_crown_landing");
   addBox(level, root, 0.28, 10.0, 0.28, 242.5, 96.0, PRESSURE_CROWN.z + 2.3, mats.steelDark, undefined, false);
   addBox(level, root, 0.28, 10.0, 0.28, 242.5, 96.0, PRESSURE_CROWN.z - 2.3, mats.steelDark, undefined, false);
@@ -190,7 +152,6 @@ function ensureWorld(level: Level): PressureBindings {
   return made;
 }
 
-/** Presentation only. Mechanical truth remains in the shared network. */
 export function applyPressureCrownCoupling(level: Level, sim: Simulation): void {
   const b = ensureWorld(level);
   const rube = sim.state().rube;
@@ -213,11 +174,7 @@ export function applyPressureCrownCoupling(level: Level, sim: Simulation): void 
   for (let i = 0; i < b.governorWeights.length; i++) {
     const angle = w10.flywheel.angle + (i * Math.PI * 2) / b.governorWeights.length;
     const radius = w10.governorRadius;
-    b.governorWeights[i]!.position.set(
-      PRESSURE_CROWN.crownX + radius * Math.cos(angle),
-      PRESSURE_CROWN.crownY + 3.2 + radius * Math.sin(angle),
-      PRESSURE_CROWN.z,
-    );
+    b.governorWeights[i]!.position.set(PRESSURE_CROWN.crownX + radius * Math.cos(angle), PRESSURE_CROWN.crownY + 3.2 + radius * Math.sin(angle), PRESSURE_CROWN.z);
   }
 
   const q = Math.max(0.25, w10.bridgeTravel);
@@ -235,4 +192,6 @@ export function applyPressureCrownCoupling(level: Level, sim: Simulation): void 
   if (ramIt) ramIt.y = w9.ram.y;
   const bridgeIt = level.interactables.find((x) => x.id === "mc10_bridge");
   if (bridgeIt) bridgeIt.x = PRESSURE_CROWN.crownX - 0.5 * w10.bridgeTravel;
+
+  applySkyWorldCoupling(level, sim);
 }
