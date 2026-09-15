@@ -12,8 +12,18 @@ export class GameAudio {
   buzzGain: GainNode | null = null;
   gateGain: GainNode | null = null;
   brakeGain: GainNode | null = null;
+  windGain: GainNode | null = null;
   footT = 0;
   muted = false;
+  private altitudeHooked = false;
+  private onAltitude = (ev: Event) => {
+    const detail = (ev as CustomEvent<{ height?: number; verticalSpeed?: number; chute?: boolean }>).detail ?? {};
+    const h = detail.height ?? 0;
+    const vy = Math.abs(detail.verticalSpeed ?? 0);
+    const exposure = Math.max(0, Math.min(1, (h - 72) / 75));
+    const fallRush = Math.max(0, Math.min(1, (vy - 4) / 22));
+    this.setWind(Math.max(exposure, fallRush * 0.8), Boolean(detail.chute));
+  };
 
   unlock = () => {
     if (!this.ctx) {
@@ -30,12 +40,14 @@ export class GameAudio {
       this.master.connect(this.ctx.destination);
       this.startBeds();
     }
+    if (!this.altitudeHooked) {
+      window.addEventListener("gravespire-altitude", this.onAltitude as EventListener);
+      this.altitudeHooked = true;
+    }
     if (this.ctx.state === "suspended") void this.ctx.resume();
   };
 
-  resume() {
-    this.unlock();
-  }
+  resume() { this.unlock(); }
 
   private noiseLoop(vol: number, hp: number, lp: number): { gain: GainNode; src: AudioBufferSourceNode } | null {
     if (!this.ctx || !this.amb) return null;
@@ -92,11 +104,11 @@ export class GameAudio {
     this.motor = motor;
     this.motorGain = mg;
 
-    const strain = this.noiseLoop(0, 40, 240);
-    this.strainGain = strain?.gain ?? null;
+    this.strainGain = this.noiseLoop(0, 40, 240)?.gain ?? null;
     const steam = this.noiseLoop(0, 700, 2800);
     this.steamGain = steam?.gain ?? null;
     this.steamSrc = steam?.src ?? null;
+    this.windGain = this.noiseLoop(0, 90, 1800)?.gain ?? null;
 
     const buzz = this.ctx.createOscillator();
     buzz.type = "square";
@@ -125,9 +137,7 @@ export class GameAudio {
     gg.connect(this.amb);
     gate.start();
     this.gateGain = gg;
-
-    const brake = this.noiseLoop(0, 200, 900);
-    this.brakeGain = brake?.gain ?? null;
+    this.brakeGain = this.noiseLoop(0, 200, 900)?.gain ?? null;
   }
 
   setMotor(load: number, on: boolean) {
@@ -136,30 +146,15 @@ export class GameAudio {
     this.motor.frequency.setTargetAtTime(28 + load * 90, t, 0.08);
     this.motorGain.gain.setTargetAtTime(on ? 0.04 + load * 0.08 : 0, t, 0.1);
   }
-
-  setStrain(amount: number) {
-    if (!this.ctx || !this.strainGain) return;
-    this.strainGain.gain.setTargetAtTime(amount > 0.18 ? 0.02 + amount * 0.05 : 0, this.ctx.currentTime, 0.25);
-  }
-
-  setSteam(amount: number) {
-    if (!this.ctx || !this.steamGain) return;
-    this.steamGain.gain.setTargetAtTime(amount * 0.045, this.ctx.currentTime, 0.2);
-  }
-
-  setBuzz(amount: number) {
-    if (!this.ctx || !this.buzzGain) return;
-    this.buzzGain.gain.setTargetAtTime(amount * 0.012, this.ctx.currentTime, 0.15);
-  }
-
-  setGate(amount: number) {
-    if (!this.ctx || !this.gateGain) return;
-    this.gateGain.gain.setTargetAtTime(amount * 0.06, this.ctx.currentTime, 0.08);
-  }
-
-  setBrake(amount: number) {
-    if (!this.ctx || !this.brakeGain) return;
-    this.brakeGain.gain.setTargetAtTime(amount * 0.03, this.ctx.currentTime, 0.12);
+  setStrain(amount: number) { if (this.ctx && this.strainGain) this.strainGain.gain.setTargetAtTime(amount > 0.18 ? 0.02 + amount * 0.05 : 0, this.ctx.currentTime, 0.25); }
+  setSteam(amount: number) { if (this.ctx && this.steamGain) this.steamGain.gain.setTargetAtTime(amount * 0.045, this.ctx.currentTime, 0.2); }
+  setBuzz(amount: number) { if (this.ctx && this.buzzGain) this.buzzGain.gain.setTargetAtTime(amount * 0.012, this.ctx.currentTime, 0.15); }
+  setGate(amount: number) { if (this.ctx && this.gateGain) this.gateGain.gain.setTargetAtTime(amount * 0.06, this.ctx.currentTime, 0.08); }
+  setBrake(amount: number) { if (this.ctx && this.brakeGain) this.brakeGain.gain.setTargetAtTime(amount * 0.03, this.ctx.currentTime, 0.12); }
+  setWind(amount: number, chute = false) {
+    if (!this.ctx || !this.windGain) return;
+    const target = Math.max(0, Math.min(1, amount)) * (chute ? 0.11 : 0.085);
+    this.windGain.gain.setTargetAtTime(target, this.ctx.currentTime, chute ? 0.08 : 0.35);
   }
 
   beep(freq: number, dur = 0.08, vol = 0.08) {
@@ -174,16 +169,10 @@ export class GameAudio {
     g.connect(this.sfx);
     o.start();
     o.stop(this.ctx.currentTime + dur + 0.02);
-    o.onended = () => {
-      o.disconnect();
-      g.disconnect();
-    };
+    o.onended = () => { o.disconnect(); g.disconnect(); };
   }
 
-  clank() {
-    this.beep(140 + Math.random() * 40, 0.12, 0.12);
-    this.beep(70, 0.18, 0.08);
-  }
+  clank() { this.beep(140 + Math.random() * 40, 0.12, 0.12); this.beep(70, 0.18, 0.08); }
 
   hiss(vol = 0.06) {
     if (!this.ctx || !this.sfx) return;
@@ -203,30 +192,20 @@ export class GameAudio {
     src.start();
   }
 
-  footstep(sprint: boolean) {
-    const f = 78 + Math.random() * 28 + (sprint ? 18 : 0);
-    this.beep(f, 0.045, sprint ? 0.07 : 0.048);
-  }
-
+  footstep(sprint: boolean) { this.beep(78 + Math.random() * 28 + (sprint ? 18 : 0), 0.045, sprint ? 0.07 : 0.048); }
   foot(dt: number, speed: number, grounded: boolean) {
-    if (!grounded || speed < 0.8) {
-      this.footT = 0;
-      return;
-    }
+    if (!grounded || speed < 0.8) { this.footT = 0; return; }
     this.footT += dt * speed;
-    if (this.footT > 1.05) {
-      this.footT = 0;
-      this.footstep(speed > 3.6);
-    }
+    if (this.footT > 1.05) { this.footT = 0; this.footstep(speed > 3.6); }
   }
-
   setMaster(vol: number) {
     if (!this.master) return;
     this.master.gain.value = Math.max(0, Math.min(1, vol));
     if (this.ctx?.state === "suspended") void this.ctx.resume();
   }
-
   dispose() {
+    if (this.altitudeHooked) window.removeEventListener("gravespire-altitude", this.onAltitude as EventListener);
+    this.altitudeHooked = false;
     void this.ctx?.close();
     this.ctx = null;
   }
