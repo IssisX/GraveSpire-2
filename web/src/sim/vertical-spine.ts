@@ -30,6 +30,8 @@ export const VERTICAL = {
   cradlePivotY: 47.2,
   cradleLengthM: 11.5,
   cradleMassKg: 42000.0,
+  cradleCounterMassKg: 34000.0,
+  cradleCounterArmM: 5.5,
   cradleMinRad: -0.12,
   cradleMaxRad: 0.72,
   cradleContactQ: 21.8,
@@ -105,7 +107,9 @@ export function ensureVerticalSpineState(chain: LinkedCascadeState): void {
     kind: "rotary",
     q: VERTICAL.cradleMinRad,
     v: 0,
-    inertia_si: (VERTICAL.cradleMassKg * VERTICAL.cradleLengthM * VERTICAL.cradleLengthM) / 3,
+    inertia_si:
+      (VERTICAL.cradleMassKg * VERTICAL.cradleLengthM * VERTICAL.cradleLengthM) / 3 +
+      VERTICAL.cradleCounterMassKg * VERTICAL.cradleCounterArmM * VERTICAL.cradleCounterArmM,
     damping_si: 3.2e4,
     min_q: VERTICAL.cradleMinRad,
     max_q: VERTICAL.cradleMaxRad,
@@ -220,11 +224,14 @@ export function applyVerticalSpineForces(chain: LinkedCascadeState, forces: Gene
   addGeneralizedForce(forces, MECH_ID.mc07Ascender, -VERTICAL.ascenderMassKg * G);
   addGeneralizedForce(forces, MECH_ID.mc07Countercar, -VERTICAL.countercarMassKg * G);
 
-  // Finite dog brake anchors the lower ascender until physically released.
+  // Finite sheave brake resists the actual imbalance in BOTH cable directions.
   const brakeScale = finiteBrakeFraction(chain);
   if (brakeScale > 0.01) {
-    const raw = -VERTICAL.brakeAnchorK * asc.q - VERTICAL.brakeAnchorC * asc.v;
-    addGeneralizedForce(forces, MECH_ID.mc07Ascender, clamp(raw, -VERTICAL.brakeCapacityN, VERTICAL.brakeCapacityN) * brakeScale);
+    const staticImbalanceN = 0.5 * (VERTICAL.countercarMassKg - VERTICAL.ascenderMassKg) * G;
+    const anchorCorrection = -VERTICAL.brakeAnchorK * asc.q - VERTICAL.brakeAnchorC * asc.v;
+    const ascBrake = clamp(anchorCorrection - staticImbalanceN, -VERTICAL.brakeCapacityN, VERTICAL.brakeCapacityN) * brakeScale;
+    addGeneralizedForce(forces, MECH_ID.mc07Ascender, ascBrake);
+    addGeneralizedForce(forces, MECH_ID.mc07Countercar, -ascBrake);
   }
 
   // Arriving ascender physically rotates the giant loading cradle at the top.
@@ -233,15 +240,13 @@ export function applyVerticalSpineForces(chain: LinkedCascadeState, forces: Gene
   if (cradlePen > 0) {
     const pointV = VERTICAL.cradleArmM * Math.cos(cradle.q) * cradle.v;
     const closing = asc.v - pointV;
-    const reaction = Math.min(7.0e5, Math.max(0, 6.5e5 * cradlePen + 6.0e4 * Math.max(0, closing)));
+    const reaction = Math.min(9.0e5, Math.max(0, 7.0e5 * cradlePen + 7.0e4 * Math.max(0, closing)));
     addGeneralizedForce(forces, MECH_ID.mc07Ascender, -reaction);
     addGeneralizedForce(forces, MECH_ID.mc07Cradle, reaction * VERTICAL.cradleArmM);
   }
-  addGeneralizedForce(
-    forces,
-    MECH_ID.mc07Cradle,
-    -VERTICAL.cradleMassKg * G * (VERTICAL.cradleLengthM * 0.5) * Math.cos(cradle.q),
-  );
+  const cradleGravity = -VERTICAL.cradleMassKg * G * (VERTICAL.cradleLengthM * 0.5) * Math.cos(cradle.q);
+  const counterbalanceGravity = VERTICAL.cradleCounterMassKg * G * VERTICAL.cradleCounterArmM * Math.cos(cradle.q);
+  addGeneralizedForce(forces, MECH_ID.mc07Cradle, cradleGravity + counterbalanceGravity);
 
   // MC-07 -> MC-08: cradle rotation pulls the torsion-stage latch clear.
   const latchTarget = clamp(
