@@ -12,6 +12,19 @@ import {
 } from "./types.ts";
 import { createInitialState } from "./world-init.ts";
 import {
+  applyCarryForce,
+  bodyAabb,
+  stepBodies,
+  supportedMass,
+  wakeAll,
+  wakeBody,
+  sleepingWeightOn,
+  PLAYER_FORCE_N,
+  type BodyState,
+  type StaticBox,
+  type SupportReactions,
+} from "./bodies.ts";
+import {
   evaluateTraversal,
   gallerySag,
   inhabitantCanReachShop,
@@ -46,6 +59,10 @@ const kGatePressureArmM = 0.42;
 const kCableStiffnessNpm = 1.9e6;
 const kCableDampingNsPm = 8.0e4;
 const kGalleryDeadN = 28000;
+/** Static colliders whose contact reactions load the Gallery 12 spans. */
+const kGalleryDeckIds = ["gal_floor"] as const;
+/** Static colliders whose contact reactions load the transfer frame. */
+const kFrameDeckIds = ["neck_floor", "drive_box"] as const;
 
 /**
  * Hoist drive — declared reduced DC model.
@@ -103,6 +120,12 @@ export class Simulation {
   private state_: WorldState;
   private commands_: boolean[];
   private lastGood_: WorldState;
+  /** Static world geometry bodies rest on. Content, not saved state. */
+  private statics_: StaticBox[] = [];
+  /** Where the player's hands are this tick, if they are holding something. */
+  private carry_: { x: number; y: number; z: number } | null = null;
+  /** Contact reaction measured into each static collider, N, averaged per tick. */
+  private reactions_: SupportReactions = new Map();
 
   constructor(state?: WorldState) {
     this.commands_ = COMMANDS.map(() => false);
@@ -133,7 +156,7 @@ export class Simulation {
       damage: m.damage,
     }));
     for (let i = 0; i < 900; i++) {
-      for (let k = 0; k < SUBSTEPS; k++) this.stepMechanics(MECHANICS_DT);
+      for (let k = 0; k < SUBSTEPS; k++) this.stepMechanics(MECHANICS_DT, false);
       this.commitMembers();
     }
     this.commitElectrical();
@@ -255,7 +278,6 @@ export class Simulation {
           this.push("Released without brake. Deck took an impulse.");
         }
         s.freight.payload_released = true;
-        s.freight.payload_kg = 420;
         if (
           s.freight.brake_engaged &&
           Math.abs(s.freight.vertical_velocity_mps) < 0.4 &&
@@ -330,6 +352,67 @@ export class Simulation {
         this.push(`Sling committed ${action.a} → ${action.b}. Tension-only.`);
         return "Sling committed.";
       }
+      case "grab_body": {
+        const b = this.body(action.id);
+        if (!b) return "Nothing there.";
+        if (b.attached === "hook") return `${b.name} is on the hook. Unhook it first.`;
+        const already = this.heldBody();
+        if (already && already !== b) already.attached = null;
+        b.attached = "player";
+        wakeBody(s.bodies, b);
+        // Say what the world will actually allow, from the same numbers that
+        // decide it: lift if the budget beats weight, drag if it beats friction.
+        const weightN = b.mass_kg * G;
+        const verdict =
+          weightN <= PLAYER_FORCE_N
+            ? "You can lift this."
+            : weightN * 0.45 <= PLAYER_FORCE_N
+              ? "Too heavy to lift. You can drag it."
+              : "You cannot move this by hand. Find leverage or a machine.";
+        return `${b.name}, ${b.mass_kg.toFixed(0)} kg. ${verdict}`;
+      }
+      case "release_body": {
+        const b = this.heldBody();
+        if (!b) return "Nothing in hand.";
+        b.attached = null;
+        b.restT = 0;
+        if (action.throw) {
+          // A shove, not a catapult: the same budget applied over a moment.
+          const impulse = (PLAYER_FORCE_N * 0.35) / b.mass_kg;
+          const n = Math.hypot(b.vx, b.vz) || 1;
+          b.vx += (b.vx / n) * impulse;
+          b.vz += (b.vz / n) * impulse;
+          b.vy += impulse * 0.25;
+        }
+        return `Released ${b.name}.`;
+      }
+      case "hook_body": {
+        const b = this.body(action.id);
+        if (!b) return "Nothing there.";
+        if (!s.freight.payload_released) return "The hook already has the original load on it.";
+        if (s.freight.hooked_body === b.id) return `${b.name} is already rigged.`;
+        const reach = Math.hypot(b.px - (20 + s.freight.lateral_m), b.pz);
+        if (reach > 4.2) return "The hook is not over that. Traverse the carrier to it first.";
+        if (b.attached === "player") b.attached = null;
+        s.freight.hooked_body = b.id;
+        b.attached = "hook";
+        wakeBody(s.bodies, b);
+        this.push(`${b.name} rigged to the hook. ${b.mass_kg.toFixed(0)} kg is on the rope now.`);
+        return `Rigged ${b.name}.`;
+      }
+      case "unhook_body": {
+        const id = s.freight.hooked_body;
+        if (!id) return "Nothing on the hook.";
+        const b = this.body(id);
+        s.freight.hooked_body = null;
+        if (b) {
+          b.attached = null;
+          b.restT = 0;
+          wakeBody(s.bodies, b);
+          this.push(`${b.name} released from the hook.`);
+        }
+        return "Unhooked.";
+      }
       case "vent_close": {
         if (!s.gate.vent_open) return "Vent valve is already shut.";
         s.gate.vent_open = false;
@@ -360,6 +443,7 @@ export class Simulation {
 
   advanceAuthorityTick(): void {
     const before = cloneState(this.state_);
+    this.reactions_.clear();
     for (let i = 0; i < SUBSTEPS; i++) {
       this.stepMechanics(MECHANICS_DT);
     }
@@ -378,7 +462,42 @@ export class Simulation {
     void before;
   }
 
-  private stepMechanics(dt: number): void {
+  /**
+   * Declare the static world the bodies rest on.
+   *
+   * Geometry is versioned content rebuilt on load; body dynamics are saved
+   * state. The authority owns what mass does, not where the walls are.
+   */
+  setStatics(boxes: StaticBox[]): void {
+    this.statics_ = boxes;
+  }
+
+  /** Where the player's hands are. Null releases nothing; it just stops pulling. */
+  setCarryTarget(target: { x: number; y: number; z: number } | null): void {
+    this.carry_ = target;
+  }
+
+  body(id: string): BodyState | undefined {
+    return this.state_.bodies.find((b) => b.id === id);
+  }
+
+  heldBody(): BodyState | undefined {
+    return this.state_.bodies.find((b) => b.attached === "player");
+  }
+
+  /**
+   * Reaction currently resting on a static collider, newtons.
+   *
+   * Includes both the live contact solve (bodies actively settling) and the
+   * geometric resting weight of anything that has since gone to sleep on it —
+   * a sleeping body still has its full weight down. This is a per-tick
+   * snapshot, already summed across the tick's substeps.
+   */
+  reactionOn(id: string): number {
+    return (this.reactions_.get(id) ?? 0) / SUBSTEPS + sleepingWeightOn(this.state_.bodies, this.statics_, [id]);
+  }
+
+  private stepMechanics(dt: number, includeBodies = true): void {
     const freight = this.state_.freight;
     const frame = this.state_.frame;
     const gate = this.state_.gate;
@@ -388,6 +507,13 @@ export class Simulation {
       Number(this.active("CarrierRaise")) - Number(this.active("CarrierLower"));
     const traverseAxis =
       Number(this.active("CarrierRight")) - Number(this.active("CarrierLeft"));
+
+    // What the rope is carrying: the original crate until it is set down, then
+    // the hook block plus whatever the player has rigged to it.
+    const hookedBody = freight.hooked_body ? this.body(freight.hooked_body) : undefined;
+    freight.payload_kg = freight.payload_released
+      ? 420 + (hookedBody ? supportedMass(this.state_.bodies, hookedBody) : 0)
+      : 8200;
 
     const powered = elec.carrier_powered;
     const mEff = freight.payload_kg + kHoistReflectedInertiaKg;
@@ -519,9 +645,11 @@ export class Simulation {
     const offsetFactor = 1 + 0.4 * Math.abs(effectiveOffsetM);
     const stiffness =
       kFrameBaseStiffnessNpm * (1.0 - 0.28 * frame.damage) + frame.brace_stiffness_npm;
+    const neckMassForce = this.bodyLoadOn(kFrameDeckIds) * 0.3;
     const frameForce =
       0.42 * offsetFactor * carrierForce +
       0.09 * gateForce +
+      neckMassForce +
       jackForce -
       slingForce * 0.35 -
       stiffness * (frame.deflection_m - frame.plastic_set_m) -
@@ -559,7 +687,86 @@ export class Simulation {
 
     gate.seal_misalignment_m = 0.62 * frame.deflection_m + 0.85 * frame.twist_rad;
     freight.brake_temperature_k += (293.15 - freight.brake_temperature_k) * 0.035 * dt;
+
+    if (includeBodies) this.stepBodyLayer(dt);
     this.state_.mechanics_step += 1;
+  }
+
+  /**
+   * Advance movable mass on the same schedule as everything else.
+   *
+   * The hook drives its body kinematically because the hoist already owns that
+   * motion; the player's hands apply a bounded force and let contact decide
+   * what actually moves.
+   */
+  private stepBodyLayer(dt: number): void {
+    const bodies = this.state_.bodies;
+    const f = this.state_.freight;
+
+    // The carrier is a moving support. Stamp its kinematic velocity from the
+    // same numbers that drive it, so a body resting on the deck is carried
+    // with it instead of being left behind by the next contact solve.
+    const carrierStatic = this.statics_.find((s) => s.id === "carrier");
+    if (carrierStatic) {
+      carrierStatic.vx = 0;
+      carrierStatic.vy = f.vertical_velocity_mps;
+      carrierStatic.vz = f.lateral_velocity_mps;
+    }
+    if (bodies.length === 0) return;
+
+    const hooked = f.hooked_body ? this.body(f.hooked_body) : undefined;
+    if (hooked) {
+      // The hook point is the carrier's sheave, with the sling below it.
+      const swingX = kSlingLengthM * Math.sin(f.payload_swing_rad);
+      const swingY = kSlingLengthM * Math.cos(f.payload_swing_rad);
+      const hx = 20 + f.lateral_m + swingX;
+      const hy = f.height_m - swingY;
+      hooked.attached = "hook";
+      hooked.sleeping = false;
+      hooked.vx = (hx - hooked.px) / dt;
+      hooked.vy = (hy - hooked.py) / dt;
+      hooked.vz = (0 - hooked.pz) / dt;
+      hooked.px = hx;
+      hooked.py = hy;
+      hooked.pz = 0;
+    }
+
+    const held = this.heldBody();
+    if (held && this.carry_) {
+      held.sleeping = false;
+      held.restT = 0;
+      applyCarryForce(held, this.carry_.x, this.carry_.y, this.carry_.z, dt);
+    }
+
+    stepBodies(bodies, this.statics_, dt, this.reactions_);
+
+    // Anything that leaves the world is gone; nothing else is ever deleted.
+    for (const b of bodies) {
+      if (b.py < -40) {
+        b.py = -40;
+        b.vx = 0;
+        b.vy = 0;
+        b.vz = 0;
+        b.sleeping = true;
+        if (b.attached === "player") b.attached = null;
+        if (this.state_.freight.hooked_body === b.id) this.state_.freight.hooked_body = null;
+      }
+    }
+  }
+
+  /**
+   * Structural demand from resting mass, measured rather than assumed.
+   *
+   * The gallery's load is its own dead weight plus whatever the player has
+   * actually put on it. Drag ballast onto Gallery 12 and the spans carry it;
+   * take it off and they do not.
+   */
+  private bodyLoadOn(ids: readonly string[]): number {
+    let liveReaction = 0;
+    for (const id of ids) liveReaction += this.reactions_.get(id) ?? 0;
+    // Live reaction sums across this tick's substeps; sleeping weight is a
+    // single geometric snapshot and does not get divided by that count.
+    return liveReaction / SUBSTEPS + sleepingWeightOn(this.state_.bodies, this.statics_, ids);
   }
 
   private commitMembers(): void {
@@ -569,8 +776,7 @@ export class Simulation {
       return Math.max(k, 1);
     });
     const sumK = weights.reduce((a, b) => a + b, 0);
-    const extra = this.state_.flags.payload_on_neck ? 6000 : 0;
-    const total = kGalleryDeadN + extra;
+    const total = kGalleryDeadN + this.bodyLoadOn(kGalleryDeckIds);
     live.forEach((m, i) => {
       const k = weights[i]!;
       const F = total * (k / sumK);
@@ -776,7 +982,12 @@ export class Simulation {
 
   replaceState(state: WorldState): void {
     this.state_ = cloneState(state);
-    this.lastGood_ = cloneState(state);
+    this.lastGood_ = cloneState(this.state_);
+    this.carry_ = null;
+    this.reactions_.clear();
+    // Resume motion rather than settling it, but let contact re-derive from the
+    // restored configuration instead of trusting a stale sleep flag.
+    wakeAll(this.state_.bodies);
   }
 
   finite(): boolean {

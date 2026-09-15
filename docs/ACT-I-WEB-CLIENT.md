@@ -97,6 +97,64 @@ walk being open. The walk is the route along the distorted transfer deck to
 the drive housing, and it opens by changing support or load — unloading the
 carrier, connecting the neck brace, or jacking it. Three routes, all physical.
 
+## Movable mass (`web/src/sim/bodies.ts`)
+
+A rigid-body layer sits alongside the lumped coupling cell: real mass, a full
+3D inertia tensor, orientation, and box-corner contact against both the
+static world and other bodies, resolved by a sequential-impulse solver with
+Coulomb friction. This is what turns "levers, tipping, dragging, stacking,
+bridging" from a list of separately-scripted mechanics into things that
+happen because a box has weight and a floor pushes back.
+
+Nothing here is a named mechanic. A body tips off a support edge because
+torque about the contact point is real, not because a tipping rule fired. A
+plate spanning two piers is walkable because its AABB is a walkable
+collider, exactly like the floor next to it — there is no `isBridge` flag.
+Twelve pieces of salvage (`DEBRIS` in `world-init.ts`) are seeded across Bay
+07, Gallery 12, and the Transfer Neck: plates, crates, section beams, a cable
+spool, ballast blocks.
+
+The player's own force is one number, `PLAYER_FORCE_N = 900`. Whether a body
+lifts, drags, or refuses to move by hand is not authored per object — it
+falls out of that budget against the body's own weight and friction. A 26 kg
+crate lifts. A 150 kg spool won't lift but drags. A 245 kg beam does neither
+and needs the hook or a lever. The verb shown to the player (`Lift` / `Drag`
+/ `Grab`) is read off the same numbers, not hand-labeled.
+
+Grab, drag, throw, hook, and unhook are contextual actions like everything
+else in Act I — routed through `actions.ts`, performed through
+`sim.act({type: "grab_body"|"hook_body"|"unhook_body"|"release_body", ...})`.
+Holding a body overrides the normal look-based action target in
+`runtime.ts` (the question becomes "what do I do with what's in my hand,"
+not "what's in the crosshair"), offering Set down / Throw through the same
+tap/hold selector every other action uses. No new HUD chrome.
+
+The hoist hook can carry a body instead of the original payload once it is
+released: `hook_body` attaches it kinematically to the sheave, and its mass
+becomes the rope's actual load (`supportedMass`, including anything stacked
+on it), which the hoist drive, brake, and process-bus current draw all react
+to exactly as they do to the original crate.
+
+Structural load from resting mass is measured, not assumed: Gallery 12's
+spans and the transfer frame read real contact reaction off bodies resting
+on `gal_floor` / `neck_floor` / `drive_box`, including bodies that have gone
+to sleep (a settled block does not go structurally invisible just because
+the contact solver has stopped needing to re-resolve it every frame —
+`sleepingWeightOn` reads its geometric resting weight instead). Drag ballast
+onto Gallery 12 and the spans carry more load; cut a neighbour and the
+survivor's share visibly changes.
+
+The player's own collider set gains one entry per body every frame,
+synthesized from its AABB and disabled while the body is tilted past ~25° or
+held in hand — the same `moveCapsule` the player always used, now walking on
+debris because debris is genuinely there.
+
+Declared reduction: contact is corner-point-against-box, not a general
+convex solver (edge-on-edge contact between two tilted boxes is
+approximated by whichever corners penetrate), there is no joint/constraint
+system yet (no hinges, no pulleys, no rope-as-body), and nothing here
+deforms or fractures.
+
 ## Contextual interaction
 
 Two resolutions run every frame against different budgets:
@@ -181,11 +239,28 @@ what a player can see, and every one of them can fail:
   machine mode entered, refused a hoist against a set brake, hoisted after the
   brake was released, and exited on walking away; hold-to-choose selector and
   inspection opened.
+- Headless Chromium against the production build with the body layer live:
+  a naturally-resting, untouched body (`plate_a`) reports `grounded: true,
+  groundedId: "plate_a"` for the player's own capsule standing on it — the
+  collision wiring genuinely works, not just the physics in isolation. Grab
+  → drag → release cycled correctly through the context/action system, with
+  correct out-of-reach messaging at the body's declared 2.3 m reach.
 - Headless Chromium touch emulation at 1344x620 and 880x400, both landscape:
   four persistent controls during traversal, dynamic stick appears on contact
   and releases cleanly, analogue magnitude preserved (full deflection 2.55 m/s
   vs part deflection 0.38 m/s), simultaneous move and look, machine verbs
   present only in-mode, no horizontal overflow, no page errors.
+
+## Not verified here (this pass)
+
+Bridging the Bay 07 well specifically was not attempted. Its narrowest
+crossing is roughly 7 m; the longest seeded beam is 3.4 m, and a single
+piece dragged out over a gap that wide tips once its centre of mass clears
+the near edge rather than sliding flat across (correct physics, not useful
+by itself). Making that a deliberately solvable crossing needs either a
+longer asset sized and tested for it, or a two-piece composition — sizing
+and playtesting that is the natural next content pass on top of a now-real
+substrate, not a fix.
 
 ## Not verified here
 

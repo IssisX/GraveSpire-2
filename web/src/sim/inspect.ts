@@ -1,4 +1,4 @@
-import { DISTRICT_META, type DistrictId, type InspectReading, type WorldState } from "./types.ts";
+import { DISTRICT_META, districtAt, type DistrictId, type InspectReading, type WorldState } from "./types.ts";
 import { gallerySag, liveGalleryCount } from "./missions.ts";
 
 function n(v: number, digits = 1): string {
@@ -184,6 +184,35 @@ export function inspectTarget(state: WorldState, id: string): InspectReading | n
         ],
       };
     default: {
+      const body = state.bodies.find((x) => x.id === id);
+      if (body) {
+        const weightN = body.mass_kg * 9.80665;
+        const speed = Math.hypot(body.vx, body.vy, body.vz);
+        return {
+          id,
+          title: body.name,
+          district: districtAt(body.px, body.pz),
+          lines: [
+            { label: "Mass", value: n(body.mass_kg, 0), unit: "kg", source: "measured", confidence: 0.98 },
+            { label: "Weight", value: n(weightN / 1000, 2), unit: "kN", source: "measured", confidence: 0.98 },
+            { label: "Material", value: body.material, unit: "", source: "measured", confidence: 1 },
+            {
+              label: "State",
+              value: body.attached === "hook" ? "on the hook" : body.attached === "player" ? "in hand" : body.sleeping ? "at rest" : "moving",
+              unit: "",
+              source: "measured",
+              confidence: 0.99,
+            },
+            { label: "Speed", value: n(speed, 2), unit: "m/s", source: "measured", confidence: 0.9 },
+          ],
+          warning:
+            weightN > 900
+              ? "Too heavy to lift or drag by hand. Rig it to the hook, or find it leverage."
+              : weightN * 0.42 > 900
+                ? "Too heavy to lift. It will drag."
+                : "Light enough to carry.",
+        };
+      }
       const m = state.members.find((x) => x.id === id);
       if (m) {
         return {

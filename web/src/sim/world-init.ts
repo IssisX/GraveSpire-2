@@ -1,3 +1,4 @@
+import { makeBody, type BodyDef, type BodyState } from "./bodies.ts";
 import type {
   BreakerState,
   MemberState,
@@ -45,6 +46,36 @@ function gallerySpan(id: string, x: number): MemberState {
     jacked: false,
   });
 }
+
+/**
+ * Salvage and wreckage the bay has accumulated.
+ *
+ * None of these is a puzzle piece. They are masses with dimensions, and what
+ * they are useful for is whatever their mass, size and position make possible:
+ * a plate is draggable and long enough to span a gap, a section beam is far too
+ * heavy to move by hand and needs the hook or a lever, a ballast block exists to
+ * be hung off something. The capability ladder is friction and gravity, not a
+ * whitelist.
+ */
+const DEBRIS: BodyDef[] = [
+  // --- Bay 07: the opening. Enough vocabulary to invent with. ---
+  { id: "plate_a", name: "Deck plate", material: "steel", size: [2.6, 0.06, 0.5], mass_kg: 58, at: [12.6, 0.4, -8.6] },
+  { id: "plate_b", name: "Deck plate", material: "steel", size: [2.6, 0.06, 0.5], mass_kg: 58, at: [12.6, 0.5, -8.6], yaw: 0.14 },
+  { id: "crate_a", name: "Salvage crate", material: "crate", size: [0.55, 0.55, 0.55], mass_kg: 26, at: [15.4, 0.3, -8.2] },
+  { id: "crate_b", name: "Salvage crate", material: "crate", size: [0.55, 0.55, 0.55], mass_kg: 26, at: [16.1, 0.3, -8.8] },
+  { id: "beam_a", name: "Section beam", material: "steel", size: [3.4, 0.26, 0.3], mass_kg: 245, at: [8.2, 0.16, 6.4], yaw: 0.3 },
+  { id: "beam_b", name: "Section beam", material: "steel", size: [3.4, 0.26, 0.3], mass_kg: 245, at: [8.6, 0.44, 6.9], yaw: 0.22 },
+  { id: "spool_a", name: "Cable spool", material: "steel", size: [0.8, 0.8, 0.8], mass_kg: 150, at: [18.4, 0.42, 7.4] },
+  { id: "ballast_a", name: "Ballast block", material: "steel", size: [0.9, 0.6, 0.9], mass_kg: 820, at: [34.6, 0.32, 6.2] },
+
+  // --- Gallery 12: mass here is load on the spans you can cut. ---
+  { id: "plate_c", name: "Deck plate", material: "steel", size: [2.6, 0.06, 0.5], mass_kg: 58, at: [21.5, 2.6, 17.2] },
+  { id: "ballast_b", name: "Ballast block", material: "steel", size: [0.85, 0.6, 0.85], mass_kg: 620, at: [28.4, 2.78, 19.8] },
+
+  // --- Transfer neck: working stock beside the drive. ---
+  { id: "beam_c", name: "Section beam", material: "steel", size: [3.4, 0.26, 0.3], mass_kg: 245, at: [49.5, 0.16, 5.2], yaw: 1.1 },
+  { id: "crate_c", name: "Salvage crate", material: "crate", size: [0.55, 0.55, 0.55], mass_kg: 26, at: [57.4, 0.3, -1.4] },
+];
 
 export function createInitialState(): WorldState {
   const breakers: BreakerState[] = [
@@ -153,6 +184,7 @@ export function createInitialState(): WorldState {
   ];
 
   return {
+    bodies: DEBRIS.map(makeBody),
     freight: {
       height_m: 2.2,
       lateral_m: -1.8,
@@ -165,6 +197,7 @@ export function createInitialState(): WorldState {
       payout_m: 2.2,
       payload_released: false,
       cargo_damaged: false,
+      hooked_body: null,
       payload_swing_rad: 0,
       payload_swing_velocity_radps: 0,
       hoist_current_a: 0,

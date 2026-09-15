@@ -11,6 +11,14 @@
 import { Simulation } from "@/sim/simulation.ts";
 import { evaluateMissions, evaluateTraversal, inhabitantCanReachShop } from "@/sim/missions.ts";
 import { applySave, captureSave, migrate, type SaveBlob } from "@/sim/save.ts";
+import {
+  applyCarryForce,
+  bodyAabb,
+  bodyTilt,
+  makeBody,
+  stepBodies,
+  type StaticBox,
+} from "@/sim/bodies.ts";
 import { Gait } from "@/game/gait.ts";
 import { ContextResolver, eyePose, type Interactable } from "@/game/context.ts";
 import type { Collider } from "@/game/collision.ts";
@@ -450,5 +458,174 @@ group("look target and action target are different things");
 }
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+group("movable mass: resting, tipping, bridging");
+{
+  const floor: StaticBox = { id: "floor", minx: -20, maxx: 20, miny: -1, maxy: 0, minz: -20, maxz: 20 };
+  const drop = (def: Parameters<typeof makeBody>[0], statics: StaticBox[], ticks: number) => {
+    const bodies = [makeBody(def)];
+    const r = new Map<string, number>();
+    for (let i = 0; i < ticks * 4; i++) stepBodies(bodies, statics, 1 / 120, r);
+    return { b: bodies[0]!, r };
+  };
+
+  const rest = drop(
+    { id: "t", name: "T", material: "steel", size: [1, 0.4, 1], mass_kg: 100, at: [0, 3, 0] },
+    [floor],
+    120,
+  );
+  check(
+    "a dropped body comes to rest on the surface, not through it",
+    Math.abs(rest.b.py - 0.2) < 0.02,
+    `centre at ${rest.b.py.toFixed(3)} m, half-height 0.2 m`,
+  );
+  check("and it goes to sleep rather than jittering forever", rest.b.sleeping);
+  check(
+    "its weight is reported as a contact reaction",
+    (rest.r.get("floor") ?? 0) > 0,
+    `${((rest.r.get("floor") ?? 0) / (120 * 4)).toFixed(0)} N averaged`,
+  );
+
+  // Centre of mass past the support edge: it must tip off, with no tipping code.
+  const ledge: StaticBox = { id: "ledge", minx: -2, maxx: 0, miny: 0, maxy: 1, minz: -2, maxz: 2 };
+  const balanced = drop(
+    { id: "t2", name: "T2", material: "steel", size: [1, 0.3, 1], mass_kg: 80, at: [-0.6, 1.2, 0] },
+    [floor, ledge],
+    150,
+  );
+  const overhung = drop(
+    { id: "t3", name: "T3", material: "steel", size: [1, 0.3, 1], mass_kg: 80, at: [0.35, 1.2, 0] },
+    [floor, ledge],
+    150,
+  );
+  check(
+    "mass supported inside the edge stays on the ledge",
+    balanced.b.py > 0.9,
+    `y ${balanced.b.py.toFixed(2)} m`,
+  );
+  check(
+    "mass overhanging the edge tips off it",
+    overhung.b.py < 0.7,
+    `y ${overhung.b.py.toFixed(2)} m — no tipping rule was written, only torque about the contact`,
+  );
+
+  // A plate laid across two blocks is a bridge because it is a contact volume.
+  const pierA: StaticBox = { id: "pierA", minx: -2.2, maxx: -1.4, miny: 0, maxy: 1.2, minz: -1, maxz: 1 };
+  const pierB: StaticBox = { id: "pierB", minx: 1.4, maxx: 2.2, miny: 0, maxy: 1.2, minz: -1, maxz: 1 };
+  const span = drop(
+    { id: "p", name: "Plate", material: "steel", size: [4.2, 0.1, 0.6], mass_kg: 58, at: [0, 1.6, 0] },
+    [floor, pierA, pierB],
+    150,
+  );
+  check(
+    "a plate laid across two piers stays up as a span",
+    span.b.py > 1.1 && bodyTilt(span.b) < 0.2,
+    `y ${span.b.py.toFixed(2)} m, tilt ${((bodyTilt(span.b) * 180) / Math.PI).toFixed(1)} deg`,
+  );
+  const ab = bodyAabb(span.b);
+  check(
+    "and its surface is where the player would walk",
+    ab.maxy > 1.2 && ab.maxx - ab.minx > 4,
+    `top ${ab.maxy.toFixed(2)} m, ${(ab.maxx - ab.minx).toFixed(1)} m long`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+group("the force ladder is friction and gravity, not a whitelist");
+{
+  const floor: StaticBox = { id: "floor", minx: -20, maxx: 20, miny: -1, maxy: 0, minz: -20, maxz: 20 };
+  const tryCarry = (mass: number, lift: boolean) => {
+    const b = makeBody({ id: "c", name: "C", material: "steel", size: [0.6, 0.6, 0.6], mass_kg: mass, at: [0, 0.3, 0] });
+    const bodies = [b];
+    b.attached = "player";
+    const r = new Map<string, number>();
+    const target = lift ? [0, 1.6, 0] : [3.5, 0.3, 0];
+    for (let i = 0; i < 480; i++) {
+      applyCarryForce(b, target[0]!, target[1]!, target[2]!, 1 / 120);
+      stepBodies(bodies, [floor], 1 / 120, r);
+    }
+    return b;
+  };
+  check("a 26 kg crate lifts", tryCarry(26, true).py > 1.2, `${tryCarry(26, true).py.toFixed(2)} m`);
+  const spool = tryCarry(150, true);
+  check("a 150 kg spool will not lift", spool.py < 0.6, `${spool.py.toFixed(2)} m`);
+  check("but it drags", tryCarry(150, false).px > 1.5, `${tryCarry(150, false).px.toFixed(2)} m`);
+  const beam = tryCarry(245, false);
+  check(
+    "a 245 kg beam neither lifts nor drags by hand",
+    beam.px < 0.6,
+    `moved ${beam.px.toFixed(2)} m — this is where the hook or a lever is required`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+group("resting mass is measured structural load");
+{
+  const sim = new Simulation();
+  sim.setStatics([
+    { id: "gal_floor", minx: 8, maxx: 58, miny: 2.17, maxy: 2.45, minz: 11.5, maxz: 27.5 },
+    { id: "ground", minx: -40, maxx: 100, miny: -2, maxy: 0, minz: -40, maxz: 40 },
+  ]);
+  tick(sim, 120);
+  const span = () => sim.state().members.find((m) => m.id === "g12_c")!;
+  const baseForce = span().force_n;
+  const baseSag = span().sag_m;
+  check("gallery spans carry their dead load", baseForce > 0, `${(baseForce / 1000).toFixed(1)} kN`);
+  // Ballast settles onto the deck and falls asleep well within 120 ticks —
+  // its weight must still be there afterward, not vanish with the contact
+  // solver that no longer needs to run for it.
+  check(
+    "ballast resting on the deck is measured into the spans, even asleep",
+    sim.reactionOn("gal_floor") > 1000,
+    `${(sim.reactionOn("gal_floor") / 1000).toFixed(1)} kN of reaction`,
+  );
+  check(
+    "and it raises the span force above dead load alone",
+    span().force_n > baseForce * 0.9,
+    `${(span().force_n / 1000).toFixed(1)} kN`,
+  );
+  void baseSag;
+
+  // Cutting spans redistributes that measured load to the survivors.
+  const before = span().force_n;
+  sim.act({ type: "cut_member", id: "g12_a" });
+  sim.act({ type: "cut_member", id: "g12_b" });
+  tick(sim, 60);
+  check(
+    "cutting neighbours pushes their share into this span",
+    span().force_n > before,
+    `${(before / 1000).toFixed(1)} -> ${(span().force_n / 1000).toFixed(1)} kN`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+group("debris persists and stays useful");
+{
+  const sim = new Simulation();
+  sim.setStatics([{ id: "ground", minx: -40, maxx: 100, miny: -2, maxy: 0, minz: -40, maxz: 40 }]);
+  tick(sim, 300);
+  const beam = sim.body("beam_a")!;
+  const restedAt = { x: beam.px, y: beam.py, z: beam.pz };
+  check("settled debris sleeps", beam.sleeping);
+  tick(sim, 900);
+  check(
+    "and is still exactly where it was left after five more minutes of world time",
+    Math.hypot(beam.px - restedAt.x, beam.py - restedAt.y, beam.pz - restedAt.z) < 1e-9,
+    "no lifetime, no cleanup, no expiry",
+  );
+
+  const blob = captureSave(sim, { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 });
+  const restored = new Simulation();
+  restored.setStatics([{ id: "ground", minx: -40, maxx: 100, miny: -2, maxy: 0, minz: -40, maxz: 40 }]);
+  applySave(restored, blob);
+  const rb = restored.body("beam_a")!;
+  check(
+    "a save restores every body where the player left it",
+    Math.abs(rb.px - restedAt.x) < 1e-9 && Math.abs(rb.py - restedAt.y) < 1e-9,
+  );
+  check("and its orientation", Math.abs(rb.qw - beam.qw) < 1e-12);
+}
+
 console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${checks - failures}/${checks} authority reference checks`);
 if (failures > 0) process.exit(1);

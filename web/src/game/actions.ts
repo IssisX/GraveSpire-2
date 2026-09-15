@@ -13,6 +13,7 @@
 import type { WorldState } from "@/sim/types.ts";
 import type { Interactable } from "./context.ts";
 import type { MachineKind } from "./machine.ts";
+import { PLAYER_FORCE_N, type BodyState } from "@/sim/bodies.ts";
 
 export type ActionKind =
   | "talk"
@@ -27,7 +28,11 @@ export type ActionKind =
   | "jack_off"
   | "cut"
   | "bench_save"
-  | "recover_drive";
+  | "recover_drive"
+  | "grab_body"
+  | "hook_body"
+  | "unhook_body"
+  | "release_body";
 
 export interface ActionOption {
   kind: ActionKind;
@@ -42,6 +47,8 @@ export interface ActionOption {
   machine?: MachineKind;
   /** Present when the action exists but the world currently refuses it. */
   refused?: string;
+  /** release_body only: true throws (a shove with what force remains), false sets down. */
+  throwIt?: boolean;
 }
 
 export interface ActionContextState {
@@ -96,6 +103,24 @@ export function actionsFor(
 ): ActionOption[] {
   const out: ActionOption[] = [];
   const id = it.id;
+
+  // ---- movable mass --------------------------------------------------------
+  // What a body offers is read off its own mass and current state, not off a
+  // hand-authored per-object list: any body can be grabbed, and whether that
+  // grab will lift or drag is physics the player discovers by trying it.
+  if (it.kind === "body") {
+    const b = state.bodies.find((x) => x.id === id);
+    if (!b) return out;
+    if (b.attached === "hook") {
+      out.push({ kind: "unhook_body", label: `Unhook ${b.name}`, targetId: id, weight: 90 });
+    } else if (b.attached !== "player") {
+      const grabVerb = grabVerbFor(b);
+      out.push({ kind: "grab_body", label: `${grabVerb} ${b.name}`, targetId: id, weight: 90 });
+      out.push({ kind: "hook_body", label: `Hook ${b.name}`, targetId: id, weight: 40 });
+    }
+    out.push({ kind: "inspect", label: `Inspect ${b.name}`, targetId: id, weight: 20 });
+    return sort(out);
+  }
 
   // ---- people ------------------------------------------------------------
   if (it.kind === "npc") {
@@ -234,6 +259,20 @@ function pushRigging(
   } else {
     out.push({ kind: "sling_clear", label: "Cancel sling", targetId: it.id, weight: 30 });
   }
+}
+
+/**
+ * The verb the world will offer for a body the player is not yet touching,
+ * read straight off the same numbers the physics uses: a body under the
+ * budget lifts, one whose friction is still under the budget drags, and
+ * anything heavier is honest that hands alone will not move it.
+ */
+function grabVerbFor(b: BodyState): string {
+  const weightN = b.mass_kg * 9.80665;
+  if (weightN <= PLAYER_FORCE_N) return "Lift";
+  const frictionEstimate = weightN * 0.42; // matches bodies.ts's steel/crate range
+  if (frictionEstimate <= PLAYER_FORCE_N) return "Drag";
+  return "Grab";
 }
 
 function sort(list: ActionOption[]): ActionOption[] {

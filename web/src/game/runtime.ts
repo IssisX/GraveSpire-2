@@ -18,7 +18,9 @@ import {
 } from "@/sim/save.ts";
 import { GameAudio } from "./audio.ts";
 import { createInput, detectTouch } from "./input.ts";
-import { buildLevel, carrierWorld, type Interactable } from "./level.ts";
+import { buildLevel, carrierWorld, createBodyMeshes, type Interactable } from "./level.ts";
+import { bodyAabb, bodyTilt, type BodyState } from "@/sim/bodies.ts";
+import type { Collider } from "./collision.ts";
 import { Player } from "./player.ts";
 import { useGame, type MachineControlView, type Phase } from "./store.ts";
 import { DIALOGUE, talk } from "./dialogue.ts";
@@ -70,6 +72,40 @@ export function mountGame(canvas: HTMLCanvasElement) {
 
   const interactById = new Map<string, Interactable>();
   for (const it of level.interactables) interactById.set(it.id, it);
+
+  // ---- movable mass: render, collide, interact ----------------------------
+  // The simulation owns positions; everything here follows them. Colliders
+  // are the same authority the player's own capsule already tests against, so
+  // a body is not a scripted "bridge object" -- it is a box the player's
+  // normal collision resolution finds because it is genuinely there.
+  sim.setStatics(level.colliders);
+  const bodyMeshes = createBodyMeshes(scene, level.materials, sim.state().bodies);
+  const bodyColliders: Collider[] = sim.state().bodies.map((b) => ({
+    id: b.id,
+    minx: 0,
+    miny: 0,
+    minz: 0,
+    maxx: 0,
+    maxy: 0,
+    maxz: 0,
+    disabled: true,
+  }));
+  const bodyInteractables: Interactable[] = sim.state().bodies.map((b) => ({
+    id: b.id,
+    label: b.name,
+    x: b.px,
+    y: b.py,
+    z: b.pz,
+    reach: 2.3,
+    lookRange: 14,
+    kind: "body" as const,
+  }));
+  const bodyInteractableById = new Map(bodyInteractables.map((it) => [it.id, it]));
+  /** Level interactables and movable-mass interactables share one id space. */
+  const lookupInteractable = (id: string): Interactable | undefined =>
+    interactById.get(id) ?? bodyInteractableById.get(id);
+  /** Steeper than this and the player's flat capsule sweep should not trust the surface. */
+  const WALKABLE_TILT_RAD = 0.44; // roughly 25 degrees
 
   let lastCarrier = { x: 0, y: 0, z: 0 };
   let accAuth = 0;
@@ -339,6 +375,28 @@ export function mountGame(canvas: HTMLCanvasElement) {
         it.z = n.z;
       }
     }
+
+    // Movable mass: mesh transform, collider bounds, and interactable
+    // position all follow the same authoritative body every frame. A body
+    // held at arm's length does not also collide with the player carrying it.
+    bodyMeshes.sync(s.bodies);
+    for (let i = 0; i < s.bodies.length; i++) {
+      const b = s.bodies[i]!;
+      const col = bodyColliders[i]!;
+      const it = bodyInteractables[i]!;
+      const aabb = bodyAabb(b);
+      col.minx = aabb.minx;
+      col.maxx = aabb.maxx;
+      col.miny = aabb.miny;
+      col.maxy = aabb.maxy;
+      col.minz = aabb.minz;
+      col.maxz = aabb.maxz;
+      col.disabled = b.attached === "player" || bodyTilt(b) > WALKABLE_TILT_RAD;
+      it.x = b.px;
+      it.y = b.py;
+      it.z = b.pz;
+    }
+
     return pos;
   }
 
@@ -455,6 +513,26 @@ export function mountGame(canvas: HTMLCanvasElement) {
       case "recover_drive": {
         flash(sim.act({ type: "recover_drive" }));
         audio.clank();
+        return;
+      }
+      case "grab_body": {
+        flash(sim.act({ type: "grab_body", id: opt.targetId }));
+        return;
+      }
+      case "hook_body": {
+        flash(sim.act({ type: "hook_body", id: opt.targetId }));
+        audio.clank();
+        return;
+      }
+      case "unhook_body": {
+        flash(sim.act({ type: "unhook_body" }));
+        audio.clank();
+        return;
+      }
+      case "release_body": {
+        sim.setCarryTarget(null);
+        flash(sim.act({ type: "release_body", throw: Boolean(opt.throwIt) }));
+        if (opt.throwIt) audio.clank();
         return;
       }
     }
@@ -618,7 +696,9 @@ export function mountGame(canvas: HTMLCanvasElement) {
 
   function resolveContext() {
     const eye = eyePose(player.x, player.y + player.eye, player.z, player.yaw, player.pitch);
-    return resolver.resolve(eye, level.interactables, level.colliders, (it) => optionsFor(it).length > 0);
+    const items = level.interactables.concat(bodyInteractables);
+    const occluders = level.colliders.concat(bodyColliders);
+    return resolver.resolve(eye, items, occluders, (it) => optionsFor(it).length > 0);
   }
 
   // -------------------------------------------------------------- vent hazard
@@ -758,11 +838,15 @@ export function mountGame(canvas: HTMLCanvasElement) {
     lastCarrier = pos;
 
     // --- player -------------------------------------------------------------
+    // Resting mass joins the static colliders the player already tests
+    // against, so a plate bridged across a gap is walkable for the same
+    // reason the deck plate next to it is.
+    const walkColliders = level.colliders.concat(bodyColliders);
     accPlayer += dt;
     const STEP = 1 / 60;
     let guard = 0;
     while (accPlayer >= STEP && guard++ < 6) {
-      player.step(STEP, actions, level.colliders, platformDelta);
+      player.step(STEP, actions, walkColliders, platformDelta);
       accPlayer -= STEP;
     }
     if (guard >= 6) accPlayer = 0;
@@ -780,11 +864,37 @@ export function mountGame(canvas: HTMLCanvasElement) {
     }
     if (fall === "hurt") flash("Hard landing. The deck did not catch you.");
 
+    // --- carried mass: the hand pulls, contact and friction decide the rest --
+    const heldBody = sim.heldBody();
+    if (heldBody) {
+      const reachM = 1.15;
+      const cy = Math.cos(player.pitch);
+      const hx = player.x - Math.sin(player.yaw) * cy * reachM;
+      const hy = player.y + player.eye - 0.18 + Math.sin(player.pitch) * reachM;
+      const hz = player.z - Math.cos(player.yaw) * cy * reachM;
+      sim.setCarryTarget({ x: hx, y: hy, z: hz });
+    } else {
+      sim.setCarryTarget(null);
+    }
+
     // --- contextual resolution ---------------------------------------------
     const ctx = resolveContext();
-    const actionIt = ctx.action ? interactById.get(ctx.action.id) : undefined;
-    const options = actionIt ? optionsFor(actionIt) : [];
-    const dominant = options[0] ?? null;
+    let dominant: ActionOption | null;
+    let options: ActionOption[];
+    if (heldBody) {
+      // Holding something overrides ordinary look-based targeting: the
+      // question in front of the player right now is what to do with what is
+      // already in their hand, not what is in the crosshair.
+      options = [
+        { kind: "release_body", label: `Set down ${heldBody.name}`, targetId: heldBody.id, weight: 100 },
+        { kind: "release_body", label: `Throw ${heldBody.name}`, targetId: heldBody.id, weight: 50, throwIt: true },
+      ];
+      dominant = options[0]!;
+    } else {
+      const actionIt = ctx.action ? lookupInteractable(ctx.action.id) : undefined;
+      options = actionIt ? optionsFor(actionIt) : [];
+      dominant = options[0] ?? null;
+    }
     pushContext(dominant, options, ctx.look, ctx.outOfReach);
     if (useGame.getState().selectorOpen && options.length < 2) {
       useGame.getState().patch({ selectorOpen: false });

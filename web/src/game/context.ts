@@ -20,7 +20,7 @@
 
 import { lineOfSight, type Collider } from "./collision.ts";
 
-export type InteractKind = "machine" | "member" | "npc" | "board" | "bench" | "world" | "station";
+export type InteractKind = "machine" | "member" | "npc" | "board" | "bench" | "world" | "station" | "body";
 
 export interface Interactable {
   id: string;
@@ -70,6 +70,7 @@ const DEFAULT_CONE: Record<InteractKind, number> = {
   board: 0.45,
   bench: 0.42,
   world: 0.5,
+  body: 0.45,
 };
 
 const DEFAULT_PRIORITY: Record<InteractKind, number> = {
@@ -80,6 +81,7 @@ const DEFAULT_PRIORITY: Record<InteractKind, number> = {
   bench: 0.55,
   member: 0.4,
   world: 0.3,
+  body: 0.5,
 };
 
 /**

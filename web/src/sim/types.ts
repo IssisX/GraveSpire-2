@@ -48,8 +48,14 @@ export type Act =
   | { type: "sling"; a: string; b: string }
   | { type: "clear_sling" }
   | { type: "vent_close" }
+  | { type: "grab_body"; id: string }
+  | { type: "release_body"; throw: boolean }
+  | { type: "hook_body"; id: string }
+  | { type: "unhook_body" }
   | { type: "mark_save_used" }
   | { type: "end_act" };
+
+import type { BodyState } from "./bodies.ts";
 
 export interface FreightState {
   height_m: number;
@@ -68,6 +74,8 @@ export interface FreightState {
   payload_swing_velocity_radps: number;
   /** Hoist motor armature current, A. Drawn from the process bus. */
   hoist_current_a: number;
+  /** Body id currently rigged to the hook, if any. */
+  hooked_body: string | null;
 }
 
 export interface FrameState {
@@ -191,6 +199,8 @@ export interface SimEvent {
 }
 
 export interface WorldState {
+  /** Movable mass with contact. Authoritative, persistent, and never expires. */
+  bodies: BodyState[];
   freight: FreightState;
   frame: FrameState;
   gate: GateState;

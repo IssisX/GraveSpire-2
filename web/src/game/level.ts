@@ -2,8 +2,52 @@ import * as THREE from "three";
 import type { Collider } from "./collision.ts";
 import { createMaterials, makeSignTexture, type Materials } from "./materials.ts";
 import type { Interactable, InteractKind } from "./context.ts";
+import type { BodyState } from "@/sim/bodies.ts";
 
 export type { Interactable, InteractKind } from "./context.ts";
+
+export interface BodyMeshes {
+  meshes: Map<string, THREE.Mesh>;
+  /** Sync every mesh transform from the current authoritative body state. */
+  sync: (bodies: readonly BodyState[]) => void;
+  dispose: () => void;
+}
+
+/**
+ * One box mesh per movable body, built once from the authoritative starting
+ * geometry. Position and orientation are synced from `sim.state().bodies`
+ * every frame by `sync()` — the mesh never decides where the body is.
+ */
+export function createBodyMeshes(scene: THREE.Scene, mats: Materials, bodies: readonly BodyState[]): BodyMeshes {
+  const meshes = new Map<string, THREE.Mesh>();
+  const geos: THREE.BufferGeometry[] = [];
+  for (const b of bodies) {
+    const mat = b.material === "steel" ? mats.steel : b.material === "concrete" ? mats.concrete : mats.paintGreen;
+    const geo = new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2);
+    geos.push(geo);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.name = `body:${b.id}`;
+    scene.add(mesh);
+    meshes.set(b.id, mesh);
+  }
+  return {
+    meshes,
+    sync: (state) => {
+      for (const b of state) {
+        const mesh = meshes.get(b.id);
+        if (!mesh) continue;
+        mesh.position.set(b.px, b.py, b.pz);
+        mesh.quaternion.set(b.qx, b.qy, b.qz, b.qw);
+      }
+    },
+    dispose: () => {
+      for (const geo of geos) geo.dispose();
+      for (const mesh of meshes.values()) scene.remove(mesh);
+    },
+  };
+}
 
 export type Bindings = {
   carrier: THREE.Group;
