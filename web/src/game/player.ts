@@ -26,13 +26,7 @@ const FALL_BARKS = [
   "NOTE TO SELF: GRAVITY REMAINS OPERATIONAL!",
 ] as const;
 
-function moveToward2D(
-  vx: number,
-  vz: number,
-  tx: number,
-  tz: number,
-  maxDelta: number,
-): { x: number; z: number } {
+function moveToward2D(vx: number, vz: number, tx: number, tz: number, maxDelta: number): { x: number; z: number } {
   const dx = tx - vx;
   const dz = tz - vz;
   const d = Math.hypot(dx, dz);
@@ -75,36 +69,27 @@ export class Player {
   private barkClock = 0;
   private barkIndex = 0;
 
-  forward(): { x: number; z: number } {
-    return { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) };
-  }
-  right(): { x: number; z: number } {
-    return { x: Math.cos(this.yaw), z: -Math.sin(this.yaw) };
-  }
+  forward(): { x: number; z: number } { return { x: -Math.sin(this.yaw), z: -Math.cos(this.yaw) }; }
+  right(): { x: number; z: number } { return { x: Math.cos(this.yaw), z: -Math.sin(this.yaw) }; }
 
   applyLook(dx: number, dy: number, sens = 0.0022, invertY = false) {
     const prevYaw = this.yaw;
     this.yaw -= dx * sens;
     this.pitch -= dy * sens * (invertY ? -1 : 1);
     const lim = Math.PI / 2 - 0.01;
-    if (this.pitch > lim) this.pitch = lim;
-    if (this.pitch < -lim) this.pitch = -lim;
+    this.pitch = Math.max(-lim, Math.min(lim, this.pitch));
     this.yawRate = this.yaw - prevYaw;
   }
 
-  requestJump() {
-    this.jumpBuffered = 0.14;
-  }
+  requestJump() { this.jumpBuffered = 0.14; }
 
   tryMantle(colliders: Collider[]) {
     const f = this.forward();
     const m = mantleProbe(this.x, this.y, this.z, f.x, f.z, colliders);
-    if (m) {
-      this.mantleTo = m;
-      this.mantleT = 0.30;
-      return true;
-    }
-    return false;
+    if (!m) return false;
+    this.mantleTo = m;
+    this.mantleT = 0.30;
+    return true;
   }
 
   private fearBark(force = false) {
@@ -122,9 +107,7 @@ export class Player {
         u.volume = 0.86;
         window.speechSynthesis.speak(u);
       }
-    } catch {
-      /* Voice support is optional; fall physics is not. */
-    }
+    } catch { /* voice support is optional */ }
   }
 
   private deployParachute() {
@@ -134,6 +117,14 @@ export class Player {
     this.vy = Math.max(this.vy, -11.0);
     this.fearBark(true);
     return true;
+  }
+
+  private emitAtmosphere() {
+    try {
+      window.dispatchEvent(new CustomEvent("gravespire-altitude", {
+        detail: { height: this.y + this.eye, verticalSpeed: this.vy, chute: this.parachuteDeployed },
+      }));
+    } catch { /* presentation hook only */ }
   }
 
   step(dt: number, actions: Actions, colliders: Collider[], platformDelta?: { x: number; y: number; z: number }) {
@@ -155,6 +146,7 @@ export class Player {
         this.mantleTo = null;
         this.grounded = true;
       }
+      this.emitAtmosphere();
       return;
     }
 
@@ -162,7 +154,6 @@ export class Player {
     const wantH = this.crouch ? CAP_H_CROUCH : CAP_H;
     const targetEye = this.crouch ? EYE_CROUCH : EYE;
     this.eye += (targetEye - this.eye) * (1 - Math.exp(-12 * dt));
-
     this.applyLook(actions.lookX, actions.lookY, actions.lookSens, actions.invertY);
 
     const f = this.forward();
@@ -172,12 +163,9 @@ export class Player {
     this.sprinting = Boolean(!this.crouch && this.grounded && actions.moveY > 0.25 && (actions.sprint || (actions.autoSprint && inputMag > 0.86)));
 
     let maxSp = this.crouch ? CROUCH : this.sprinting ? SPRINT : this.parachuteDeployed ? CHUTE_GLIDE : WALK;
-    // Athletic footwork: sprinting favors forward drive rather than impossible full-speed side strafing.
     const strafeScale = this.sprinting ? 0.70 : 0.92;
-    const wishForward = actions.moveY;
-    const wishSide = actions.moveX * strafeScale;
-    const wishX = f.x * wishForward + r.x * wishSide;
-    const wishZ = f.z * wishForward + r.z * wishSide;
+    const wishX = f.x * actions.moveY + r.x * actions.moveX * strafeScale;
+    const wishZ = f.z * actions.moveY + r.z * actions.moveX * strafeScale;
     const wishLen = Math.hypot(wishX, wishZ);
     const nx = wishLen > 0 ? wishX / wishLen : 0;
     const nz = wishLen > 0 ? wishZ / wishLen : 0;
@@ -189,9 +177,7 @@ export class Player {
     const pvZ = this.vz;
     const currentSpeed = Math.hypot(this.vx, this.vz);
     const targetSpeed = Math.hypot(targetVx, targetVz);
-    const alignment = currentSpeed > 0.15 && targetSpeed > 0.15
-      ? (this.vx * targetVx + this.vz * targetVz) / (currentSpeed * targetSpeed)
-      : 1;
+    const alignment = currentSpeed > 0.15 && targetSpeed > 0.15 ? (this.vx * targetVx + this.vz * targetVz) / (currentSpeed * targetSpeed) : 1;
     let accel: number;
     if (!this.grounded) accel = this.parachuteDeployed ? 4.4 : 3.2;
     else if (inputMag < 0.05) accel = this.crouch ? 16 : 22;
@@ -221,13 +207,10 @@ export class Player {
       if (this.parachuteDeployed) {
         this.vy += (CHUTE_DESCENT - this.vy) * Math.min(1, 2.8 * dt);
         if (this.vy < -9 && this.airTime > 1.0) this.fearBark();
-      } else if (this.vy < -11 && this.airTime > 1.0) {
-        this.fearBark();
-      }
+      } else if (this.vy < -11 && this.airTime > 1.0) this.fearBark();
     }
 
     if (actions.jumpPressed && !this.grounded) this.deployParachute();
-
     if (this.jumpBuffered > 0) this.jumpBuffered -= dt;
     const wantJump = actions.jumpPressed || this.jumpBuffered > 0;
     if (wantJump && this.coyote > 0) {
@@ -235,35 +218,25 @@ export class Player {
       this.grounded = false;
       this.coyote = 0;
       this.jumpBuffered = 0;
-    } else if (wantJump && !this.grounded && !this.parachuteDeployed) {
-      if (this.tryMantle(colliders)) {
-        this.jumpBuffered = 0;
-        return;
-      }
+    } else if (wantJump && !this.grounded && !this.parachuteDeployed && this.tryMantle(colliders)) {
+      this.jumpBuffered = 0;
+      return;
     }
 
-    // Legacy carrier support remains frame-delta based. New causal mechanisms expose
-    // authoritative surface velocity on their collider and are integrated per player substep.
     if (platformDelta && this.grounded && this.groundedId === "carrier") {
       this.x += platformDelta.x;
       this.y += platformDelta.y;
       this.z += platformDelta.z;
     }
 
-    let supportVx = 0;
-    let supportVy = 0;
-    let supportVz = 0;
+    let supportVx = 0, supportVy = 0, supportVz = 0;
     if (this.grounded && this.groundedId) {
       const support = colliders.find((c) => c.id === this.groundedId && !c.disabled);
       if (support) {
         supportVx = support.surfaceVx ?? 0;
         supportVy = support.surfaceVy ?? 0;
         supportVz = support.surfaceVz ?? 0;
-        if (
-          support.surfaceAngularZ != null &&
-          support.surfacePivotX != null &&
-          support.surfacePivotY != null
-        ) {
+        if (support.surfaceAngularZ != null && support.surfacePivotX != null && support.surfacePivotY != null) {
           const rx = this.x - support.surfacePivotX;
           const ry = this.y - support.surfacePivotY;
           supportVx += -support.surfaceAngularZ * ry;
@@ -275,13 +248,7 @@ export class Player {
     const steps = Math.max(1, Math.ceil((Math.hypot(this.vx + supportVx, this.vy + supportVy, this.vz + supportVz) * dt) / 0.18));
     const sdt = dt / steps;
     for (let i = 0; i < steps; i++) {
-      const res = moveCapsule(
-        { x: this.x, y: this.y, z: this.z, r: CAP_R, h: wantH },
-        (this.vx + supportVx) * sdt,
-        (this.vy + supportVy) * sdt,
-        (this.vz + supportVz) * sdt,
-        colliders,
-      );
+      const res = moveCapsule({ x: this.x, y: this.y, z: this.z, r: CAP_R, h: wantH }, (this.vx + supportVx) * sdt, (this.vy + supportVy) * sdt, (this.vz + supportVz) * sdt, colliders);
       this.x = res.x;
       this.y = res.y;
       this.z = res.z;
@@ -296,8 +263,8 @@ export class Player {
       this.landed = Math.max(0, Math.min(1, (drop - 0.35) / 4.2));
       this.parachuteDeployed = false;
     }
-
     this.speed = Math.hypot(this.vx, this.vz);
+    this.emitAtmosphere();
   }
 
   fallDamage(): "none" | "hurt" | "dead" {
