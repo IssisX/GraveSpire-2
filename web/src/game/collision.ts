@@ -94,7 +94,10 @@ export function moveCapsule(
   let hitHead = false;
   for (const c of list) {
     if (!overlapX(c, x, r * 0.9) || !overlapZ(c, z, r * 0.9)) continue;
-    if (y < c.maxy && y + h > c.miny) {
+    // <= , not < : a capsule resting exactly on c.maxy (where the grounding
+    // branch below snaps it every landing) must still read as touching next
+    // frame, or a motionless player flutters ungrounded/grounded forever.
+    if (y <= c.maxy && y + h > c.miny) {
       const fromAbove = cap.y >= c.maxy - 0.08 || vy <= 0;
       const fromBelow = cap.y + cap.h <= c.miny + 0.08 || vy > 0;
       if (fromAbove && y <= c.maxy && y + h > c.maxy) {

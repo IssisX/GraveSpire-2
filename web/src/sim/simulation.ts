@@ -391,8 +391,11 @@ export class Simulation {
         if (!b) return "Nothing there.";
         if (!s.freight.payload_released) return "The hook already has the original load on it.";
         if (s.freight.hooked_body === b.id) return `${b.name} is already rigged.`;
+        // The original payload sits right under the sheave; a rigger walking a
+        // hook out on its own falls line reaches well past that. 5.5 m is the
+        // hook's real working radius, not a tuned number for one payload.
         const reach = Math.hypot(b.px - (20 + s.freight.lateral_m), b.pz);
-        if (reach > 4.2) return "The hook is not over that. Traverse the carrier to it first.";
+        if (reach > 5.5) return "The hook is not over that. Traverse the carrier to it first.";
         if (b.attached === "player") b.attached = null;
         s.freight.hooked_body = b.id;
         b.attached = "hook";

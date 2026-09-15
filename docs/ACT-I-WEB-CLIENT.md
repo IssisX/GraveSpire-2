@@ -149,6 +149,26 @@ synthesized from its AABB and disabled while the body is tilted past ~25° or
 held in hand — the same `moveCapsule` the player always used, now walking on
 debris because debris is genuinely there.
 
+The Bay 07 well (≈7 m across) is bridged the same way — not a scripted
+crossing, but one asset (`plank_well`, 320 kg) sized and placed so the
+general rules resolve it: too heavy to lift or drag by hand (the force
+ladder already refuses it), stored on solid ground with zero overhang so it
+never tips before anyone touches it, and oriented with its length already
+along world Z so the hoist's hook — whose kinematic point is always at
+z = 0, the well's own centreline — lowers it dead-center with no
+reorientation needed. Hooked, traversed, and set down, it becomes a walkable
+span for the same reason any other resting body is: its AABB is a collider.
+
+Fixed alongside it: `moveCapsule`'s ground re-check (`collision.ts`) used a
+strict `y < c.maxy` guard, which a capsule resting at exactly `y === c.maxy`
+— precisely where the grounding branch snaps it on landing — fails every
+following frame it doesn't move. That flipped `grounded` false for one frame
+out of every two once genuinely at rest (gravity reapplies, the capsule sinks
+a hair, re-lands, flips true, repeats), invisible during normal play because
+the position barely moves and jump coyote-time absorbs it, but real: a
+motionless player was never reliably `grounded` on anything. `y <= c.maxy`
+fixes it for every resting collider, not just bodies.
+
 Declared reduction: contact is corner-point-against-box, not a general
 convex solver (edge-on-edge contact between two tilted boxes is
 approximated by whichever corners penetrate), there is no joint/constraint
@@ -231,7 +251,7 @@ what a player can see, and every one of them can fail:
 ## Verified here
 
 - `npm run typecheck` — clean.
-- `npm test` — 62/62 authority reference checks.
+- `npm test` — 81/81 authority reference checks.
 - `npm run build` — production bundle emitted.
 - `make test` — native C++ reference cases still pass, unchanged.
 - Headless Chromium against the production build: boot → menu → settings →
@@ -250,17 +270,31 @@ what a player can see, and every one of them can fail:
   and releases cleanly, analogue magnitude preserved (full deflection 2.55 m/s
   vs part deflection 0.38 m/s), simultaneous move and look, machine verbs
   present only in-mode, no horizontal overflow, no page errors.
+- Headless Chromium against the production build, well-bridging end to end:
+  `plank_well` rendered at its seeded rest position; context system offered
+  it at range; the full authoritative sequence (dock the original payload →
+  traverse the carrier west → hook the plank → traverse east → unhook) ran
+  through `sim.act`/`sim.advanceAuthorityTick` inside the live page and
+  settled the plank at `z ≈ 0`, spanning the well's ±3.42 m edges; the
+  player's own `moveCapsule`, unmodified, reports `grounded: true,
+  groundedId: "plank_well"` standing on it.
 
-## Not verified here (this pass)
+## Sibling branches surveyed, nothing adopted
 
-Bridging the Bay 07 well specifically was not attempted. Its narrowest
-crossing is roughly 7 m; the longest seeded beam is 3.4 m, and a single
-piece dragged out over a gap that wide tips once its centre of mass clears
-the near edge rather than sliding flat across (correct physics, not useful
-by itself). Making that a deliberately solvable crossing needs either a
-longer asset sized and tested for it, or a two-piece composition — sizing
-and playtesting that is the natural next content pass on top of a now-real
-substrate, not a fix.
+`ChatGPT` and `Grok` were checked for anything worth taking into this pass.
+`ChatGPT` builds its own Rube-Goldberg-style mechanisms (`rube-mechanics.ts`,
+`linked-cascade.ts`, `spring-shuttle.ts`) on a separate `RubeState` tree, with
+each mechanism's geometry hand-authored as its own constants (`CASCADE`,
+lever/ballast/lift parameters) — a second physics authority built from
+per-mechanic modules, which is the pattern this substrate exists to replace,
+not extend. Its `mechanical-network.ts` (generalized coordinates, cable
+length as a function of DOFs, force via virtual work) is a sound primitive in
+the abstract, but it is wired to that parallel state tree and its own
+mechanism modules, not to `bodies.ts`; adopting it here would mean running
+two physics authorities side by side. Left as a noted idea, not pulled in.
+`Grok`'s relevant diff is UX polish on `player.ts` (jump buffering, auto
+sprint, camera lean from acceleration) — no debris, no well crossing, nothing
+that overlaps this pass's work.
 
 ## Not verified here
 

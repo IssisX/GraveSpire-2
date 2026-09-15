@@ -75,6 +75,19 @@ const DEBRIS: BodyDef[] = [
   // --- Transfer neck: working stock beside the drive. ---
   { id: "beam_c", name: "Section beam", material: "steel", size: [3.4, 0.26, 0.3], mass_kg: 245, at: [49.5, 0.16, 5.2], yaw: 1.1 },
   { id: "crate_c", name: "Salvage crate", material: "crate", size: [0.55, 0.55, 0.55], mass_kg: 26, at: [57.4, 0.3, -1.4] },
+
+  // Walkway plank: the well crossing. At 320 kg it is well past what a
+  // person lifts or drags (the beams already teach that lesson) -- this one
+  // is answered by the hook. Oriented with its length already along world Z
+  // (yaw 0) so hooking and lowering it needs no reorientation: the hoist's z
+  // is always the well's centerline, so hooked it settles to x = 20 + lateral,
+  // z = 0 -- dead center of the 7 m gap, 0.3 m of bearing onto solid floor on
+  // each side. Stored on the solid west apron (floor_w, z in [-11, 11] with
+  // no edge to overhang) rather than anywhere near the well itself -- resting
+  // this much unsupported length across even a distant edge is enough
+  // overhang to rotate it off that edge under its own weight before anyone
+  // touches it. Reachable with the carrier traversed to its west limit.
+  { id: "plank_well", name: "Walkway plank", material: "steel", size: [0.9, 0.08, 7.6], mass_kg: 320, at: [9.5, 0.35, 0] },
 ];
 
 export function createInitialState(): WorldState {
