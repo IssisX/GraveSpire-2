@@ -9,9 +9,12 @@ type BodyBinding = {
   root: THREE.Group;
   cols: Collider[];
   kind: IngredientKind;
+  sling?: THREE.Mesh;
 };
 
 const cache = new WeakMap<Level, Map<string, BodyBinding>>();
+const UP = new THREE.Vector3(0, 1, 0);
+const DIR = new THREE.Vector3();
 
 function geo<T extends THREE.BufferGeometry>(level: Level, g: T): T {
   level.geos.push(g);
@@ -19,10 +22,21 @@ function geo<T extends THREE.BufferGeometry>(level: Level, g: T): T {
 }
 
 function materialFor(level: Level, kind: IngredientKind): THREE.Material {
-  if (kind === "ballast") return level.materials.carrier;
+  if (kind === "ballast" || kind === "hanging") return level.materials.carrier;
   if (kind === "wedge") return level.materials.hazard;
   if (kind === "roller") return level.materials.steel;
   return level.materials.rust;
+}
+
+function placeSling(mesh: THREE.Mesh, ax: number, ay: number, az: number, bx: number, by: number, bz: number) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const dz = bz - az;
+  const len = Math.hypot(dx, dy, dz) || 0.01;
+  mesh.position.set((ax + bx) * 0.5, (ay + by) * 0.5, (az + bz) * 0.5);
+  mesh.scale.set(1, len, 1);
+  DIR.set(dx / len, dy / len, dz / len);
+  mesh.quaternion.setFromUnitVectors(UP, DIR);
 }
 
 function makeBody(level: Level, body: ReturnType<typeof compositionBodyWorld>[number]): BodyBinding {
@@ -31,12 +45,10 @@ function makeBody(level: Level, body: ReturnType<typeof compositionBodyWorld>[nu
   const root = new THREE.Group();
   root.name = `composition-${body.id}`;
   const mat = materialFor(level, body.kind);
+  let sling: THREE.Mesh | undefined;
 
   if (body.kind === "roller") {
-    const roll = new THREE.Mesh(
-      geo(level, new THREE.CylinderGeometry(body.sizeY * 0.5, body.sizeY * 0.5, body.sizeZ, 16)),
-      mat,
-    );
+    const roll = new THREE.Mesh(geo(level, new THREE.CylinderGeometry(body.sizeY * 0.5, body.sizeY * 0.5, body.sizeZ, 16)), mat);
     roll.rotation.x = Math.PI / 2;
     roll.castShadow = true;
     roll.receiveShadow = true;
@@ -49,10 +61,7 @@ function makeBody(level: Level, body: ReturnType<typeof compositionBodyWorld>[nu
     shape.lineTo(body.sizeX * 0.5, -body.sizeY * 0.5);
     shape.lineTo(body.sizeX * 0.5, body.sizeY * 0.5);
     shape.closePath();
-    const wedge = new THREE.Mesh(
-      geo(level, new THREE.ExtrudeGeometry(shape, { depth: body.sizeZ, bevelEnabled: false })),
-      mat,
-    );
+    const wedge = new THREE.Mesh(geo(level, new THREE.ExtrudeGeometry(shape, { depth: body.sizeZ, bevelEnabled: false })), mat);
     wedge.position.z = -body.sizeZ * 0.5;
     wedge.castShadow = true;
     wedge.receiveShadow = true;
@@ -62,6 +71,18 @@ function makeBody(level: Level, body: ReturnType<typeof compositionBodyWorld>[nu
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     root.add(mesh);
+    if (body.kind === "hanging") {
+      const eye = new THREE.Mesh(geo(level, new THREE.TorusGeometry(0.25, 0.055, 6, 18)), level.materials.steel);
+      eye.position.y = body.sizeY * 0.5 + 0.16;
+      eye.rotation.x = Math.PI / 2;
+      root.add(eye);
+      sling = new THREE.Mesh(geo(level, new THREE.CylinderGeometry(0.035, 0.035, 1, 8)), level.materials.steelDark);
+      scene.add(sling);
+      const anchorEye = new THREE.Mesh(geo(level, new THREE.TorusGeometry(0.30, 0.06, 6, 18)), level.materials.steel);
+      anchorEye.position.set(body.anchorX ?? body.x, body.anchorY ?? body.y, body.z);
+      anchorEye.rotation.x = Math.PI / 2;
+      scene.add(anchorEye);
+    }
   }
   scene.add(root);
 
@@ -77,7 +98,7 @@ function makeBody(level: Level, body: ReturnType<typeof compositionBodyWorld>[nu
     level.colliders.push(c);
     cols.push(c);
   }
-  return { root, cols, kind: body.kind };
+  return { root, cols, kind: body.kind, sling };
 }
 
 function updateSegments(binding: BodyBinding, body: ReturnType<typeof compositionBodyWorld>[number]) {
@@ -145,8 +166,19 @@ export function applyCompositionWorld(level: Level, sim: Simulation): void {
       bindings.set(body.id, b);
     }
     b.root.position.set(body.x, body.y, body.z);
-    b.root.rotation.z = body.angle;
+    b.root.rotation.z = body.kind === "hanging" ? 0 : body.angle;
     if (body.kind === "beam" || body.kind === "wedge") updateSegments(b, body);
     else updateBox(b, body);
+    if (body.kind === "hanging" && b.sling) {
+      placeSling(
+        b.sling,
+        body.anchorX ?? body.x,
+        body.anchorY ?? body.y,
+        body.z,
+        body.x,
+        body.y + body.sizeY * 0.5,
+        body.z,
+      );
+    }
   }
 }
