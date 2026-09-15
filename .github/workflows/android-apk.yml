@@ -31,8 +31,11 @@ jobs:
             Grok) tag=grok-act1-apk; name="GRAVESPIRE Act I - debug APK (Grok)" ;;
             *)    tag=claude-act1-apk; name="GRAVESPIRE Act I - debug APK (Claude)" ;;
           esac
+          # Artifact names may not contain "/", and branch names may.
+          slug=$(echo "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -86,7 +89,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gravespire-act1-debug-${{ github.ref_name }}
+          name: gravespire-act1-debug-${{ steps.channel.outputs.slug }}
           path: dist-apk/gravespire-act1-debug.apk
           if-no-files-found: error
 
