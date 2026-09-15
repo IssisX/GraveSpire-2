@@ -6,6 +6,11 @@ import {
   enforceVerticalSpineConstraints,
   ensureVerticalSpineState,
 } from "./vertical-spine.ts";
+import {
+  applyPressureCrownForces,
+  enforcePressureCrownConstraints,
+  ensurePressureCrownState,
+} from "./pressure-crown.ts";
 
 export const SPRING_SHUTTLE = {
   massKg: 12000.0,
@@ -59,6 +64,7 @@ export function ensureSpringShuttleState(chain: LinkedCascadeState): void {
     stop_restitution: 0.12,
   });
   ensureVerticalSpineState(chain);
+  ensurePressureCrownState(chain);
 }
 
 /**
@@ -91,9 +97,10 @@ export function applySpringShuttleForces(chain: LinkedCascadeState, forces: Gene
   const springUpN = SPRING_SHUTTLE.springPreloadN + SPRING_SHUTTLE.springK * shuttle.q;
   addGeneralizedForce(forces, MECH_ID.springShuttle, SPRING_SHUTTLE.massKg * G - springUpN);
 
-  // MC-07/08 contribute forces to this SAME GeneralizedForces object before
-  // linked-cascade performs the one authoritative mechanical-network step.
+  // Every downstream mechanism contributes into this SAME force vector before
+  // linked-cascade performs one authoritative mechanical-network integration.
   applyVerticalSpineForces(chain, forces);
+  applyPressureCrownForces(chain, forces);
 }
 
 /** Pawl is unilateral: while its face blocks the guide, the shuttle cannot descend. */
@@ -106,6 +113,7 @@ export function enforceSpringShuttleContact(chain: LinkedCascadeState, beforeQ: 
     if (shuttle.v > 0) shuttle.v = 0;
   }
   enforceVerticalSpineConstraints(chain);
+  enforcePressureCrownConstraints(chain);
 }
 
 export function springShuttleWorld(chain: LinkedCascadeState): { x: number; y: number; z: number; vy: number } {
