@@ -72,6 +72,12 @@ class Simulation final {
   [[nodiscard]] const WorldState& state() const noexcept;
   [[nodiscard]] bool finite() const noexcept;
 
+  // Derived from committed physical state — not independent flags.
+  [[nodiscard]] bool gallery_passable() const noexcept;
+  [[nodiscard]] bool neck_walk_clear() const noexcept;
+  [[nodiscard]] bool carrier_at_recv() const noexcept;
+  [[nodiscard]] double gate_jam_multiplier() const noexcept;
+
  private:
   void step_mechanics(double dt);
   [[nodiscard]] bool active(Command command) const;
@@ -81,4 +87,3 @@ class Simulation final {
 };
 
 }  // namespace gravespire
-
