@@ -18,6 +18,13 @@ enum class Command : std::uint8_t {
   GateOpen,
   GateClose,
   GateWedge,
+  SpireLiftUp,
+  SpireLiftDown,
+  SkyBallastLeft,
+  SkyBallastRight,
+  SkyCarBrake,
+  WindCarBrake,
+  Count,
 };
 
 struct FreightState {
@@ -53,10 +60,42 @@ struct GateState {
   bool wedged{false};
 };
 
+struct SpireState {
+  // Exterior traction hoist: a single reduced coordinate for car + counterweight.
+  double lift_q_m{0.0};
+  double lift_velocity_mps{0.0};
+  double lift_brake_temperature_k{293.15};
+  bool lift_brake_engaged{true};
+  bool lift_brake_slipping{false};
+
+  // Lift arrival physically retracts this over-centre bridge latch.
+  double bridge_latch_m{0.0};
+  double bridge_latch_velocity_mps{0.0};
+  double bridge_angle_rad{1.28};
+  double bridge_angular_velocity_radps{0.0};
+
+  // A finite-speed ballast trolley changes the sky-car counterweight load.
+  double sky_ballast_x_m{0.0};
+  double sky_ballast_velocity_mps{0.0};
+  double sky_car_q_m{0.0};
+  double sky_car_velocity_mps{0.0};
+  bool sky_car_brake_engaged{true};
+  bool sky_car_brake_slipping{false};
+
+  // Sky-car arrival clears the wind-hoist latch; wind then supplies finite work.
+  double wind_latch_m{0.0};
+  double wind_latch_velocity_mps{0.0};
+  double wind_car_q_m{0.0};
+  double wind_car_velocity_mps{0.0};
+  bool wind_car_brake_engaged{true};
+  bool wind_car_brake_slipping{false};
+};
+
 struct WorldState {
   FreightState freight{};
   FrameState frame{};
   GateState gate{};
+  SpireState spire{};
   std::uint64_t authority_tick{0};
   std::uint64_t mechanics_step{0};
 };
@@ -69,6 +108,10 @@ class Simulation final {
   static constexpr double kWinchDeckM = 6.15;
   static constexpr double kRatedPayloadKg = 8200.0;
 
+  static constexpr double kSpireLiftTravelM = 60.0;
+  static constexpr double kSkyCarTravelM = 70.0;
+  static constexpr double kWindCarTravelM = 100.0;
+
   Simulation() = default;
 
   void set_command(Command command, bool active);
@@ -77,7 +120,7 @@ class Simulation final {
   [[nodiscard]] const WorldState& state() const noexcept;
   [[nodiscard]] bool finite() const noexcept;
 
-  // Derived from committed physical state — not independent flags.
+  // Derived from committed physical state — not independent mission flags.
   [[nodiscard]] bool gallery_passable() const noexcept;
   [[nodiscard]] bool neck_walk_clear() const noexcept;
   [[nodiscard]] bool carrier_at_recv() const noexcept;
@@ -89,12 +132,17 @@ class Simulation final {
   [[nodiscard]] double cable_extension_m() const noexcept;
   [[nodiscard]] bool brake_slipping() const noexcept;
 
+  [[nodiscard]] bool spire_bridge_walkable() const noexcept;
+  [[nodiscard]] bool spire_sky_ballast_loaded() const noexcept;
+  [[nodiscard]] bool spire_wind_unlocked() const noexcept;
+
  private:
   void step_mechanics(double dt);
+  void step_spire(double dt);
   [[nodiscard]] bool active(Command command) const;
 
   WorldState state_{};
-  std::array<bool, 12> commands_{};
+  std::array<bool, static_cast<std::size_t>(Command::Count)> commands_{};
 };
 
 }  // namespace gravespire
