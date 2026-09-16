@@ -1,7 +1,9 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=5 format=3 uid="uid://b07gravespire"]
 
-[ext_resource path="res://main.gd" type="Script" id="1"]
+[ext_resource type="Script" path="res://main.gd" id="1"]
+[ext_resource type="Script" path="res://player.gd" id="2"]
+[ext_resource type="Script" path="res://gait.gd" id="3"]
+[ext_resource type="Script" path="res://hud.gd" id="4"]
 
-[node name="GraveSpire" type="Node3D"]
+[node name="Bay07" type="Node3D"]
 script = ExtResource("1")
-

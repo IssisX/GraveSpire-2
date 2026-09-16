@@ -118,6 +118,16 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             onChange={(e) => patch({ steamDensity: Number(e.target.value) })}
           />
         </Row>
+        <Row label="Airborne dust" value={s.atmosphereDensity.toFixed(2)}>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={s.atmosphereDensity}
+            onChange={(e) => patch({ atmosphereDensity: Number(e.target.value) })}
+          />
+        </Row>
       </section>
 
       <div className="gs-actions">

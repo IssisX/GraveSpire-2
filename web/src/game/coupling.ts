@@ -131,9 +131,12 @@ export function applyCoupling(
     (m.material as THREE.MeshStandardMaterial).emissiveIntensity = shopOn ? 0.9 : 0.05;
   }
   for (const l of b.bayLights) {
-    if (l.visible) l.intensity = s.electrical.bay_lights ? 14 : 0.55;
+    if (l.visible) level.atmosphere.setLampBase(l, s.electrical.bay_lights ? 14 : 0.55);
   }
-  b.wellLamp.intensity = s.electrical.bay_lights ? (cfg.lightQuality === "low" ? 16 : 32) : 7;
+  level.atmosphere.setLampBase(
+    b.wellLamp,
+    s.electrical.bay_lights ? (cfg.lightQuality === "low" ? 16 : 32) : 7,
+  );
   b.hemi.intensity = s.electrical.bay_lights ? (cfg.lightQuality === "low" ? 0.72 : 1.05) : 0.38;
   b.amb.intensity = s.electrical.bay_lights ? (cfg.lightQuality === "low" ? 0.4 : 0.58) : 0.18;
 

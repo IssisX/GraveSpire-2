@@ -1,0 +1,174 @@
+name: godot-android
+
+on:
+  push:
+    branches: [ChatGPT]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: godot-android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  GODOT_VERSION: "4.7.2"
+  GODOT_TAG: "4.7.2-stable"
+  NDK_VERSION: "28.1.13356709"
+
+jobs:
+  native-reference:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Coupled reference cases
+        run: make test
+
+  godot-apk:
+    runs-on: ubuntu-24.04
+    needs: native-reference
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: SCons
+        run: python -m pip install scons
+
+      - name: Android SDK and NDK r28b
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK" ]; then
+            SDK="$HOME/android-sdk"
+            mkdir -p "$SDK/cmdline-tools"
+            curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
+            mkdir -p "$SDK/cmdline-tools/latest"
+            mv /tmp/cmdtools/cmdline-tools/* "$SDK/cmdline-tools/latest/"
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          SM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager "$SDK"/cmdline-tools/latest/bin/sdkmanager 2>/dev/null | tail -1)
+          echo "sdkmanager=$SM sdk=$SDK"
+          yes | "$SM" --licenses >/dev/null || true
+          "$SM" --install "platforms;android-35" "build-tools;35.0.1" "platform-tools" "ndk;${NDK_VERSION}" "cmake;3.10.2.4988404"
+          NDK="$SDK/ndk/${NDK_VERSION}"
+          test -d "$NDK"
+          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+
+      - name: Build Android arm64 GDExtension
+        run: |
+          set -euo pipefail
+          scons api_version=4.7 platform=android target=template_debug arch=arm64 -j"$(nproc)"
+          ls -lh game/bin/
+          test -f game/bin/libgravespire.android.template_debug.arm64.so
+
+      - name: Build Linux GDExtension (editor host during export)
+        run: |
+          set -euo pipefail
+          scons api_version=4.7 platform=linux target=template_debug -j"$(nproc)"
+          test -f game/bin/libgravespire.linux.template_debug.x86_64.so
+
+      - name: Download Godot 4.7.2 and export templates
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/godot" "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          curl -fsSL -o /tmp/godot.zip "https://github.com/godotengine/godot-builds/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d "$HOME/godot"
+          GODOT_BIN=$(find "$HOME/godot" -type f -name "Godot*" | head -1)
+          chmod +x "$GODOT_BIN"
+          echo "GODOT_BIN=$GODOT_BIN" >> "$GITHUB_ENV"
+          curl -fsSL -o /tmp/templates.tpz "https://github.com/godotengine/godot-builds/releases/download/${GODOT_TAG}/Godot_v${GODOT_TAG}_export_templates.tpz"
+          unzip -q /tmp/templates.tpz -d /tmp/templates
+          if [ -d /tmp/templates/templates ]; then
+            cp -a /tmp/templates/templates/. "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+          else
+            cp -a /tmp/templates/. "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+          fi
+          ls "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/" | head
+
+      - name: Debug keystore
+        run: |
+          keytool -genkeypair -v -keystore "$HOME/debug.keystore" -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" -deststoretype pkcs12
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/debug.keystore" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+
+      - name: Godot editor Android SDK path
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/godot"
+          SETTINGS="$HOME/.config/godot/editor_settings-4.tres"
+          cat > "$SETTINGS" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "${ANDROID_HOME}"
+          export/android/java_sdk_path = "${JAVA_HOME}"
+          export/android/debug_keystore = "${HOME}/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+          # 4.7 may version the settings file.
+          cp "$SETTINGS" "$HOME/.config/godot/editor_settings-4.7.tres"
+
+      - name: Export Godot Android debug APK
+        working-directory: game
+        run: |
+          set -euo pipefail
+          mkdir -p ../build
+          ls -lh bin/
+          "$GODOT_BIN" --version || true
+          "$GODOT_BIN" --headless --path . --import --quit || true
+          "$GODOT_BIN" --headless --path . --verbose --export-debug "Android" ../build/GRAVESPIRE-android-debug.apk
+          ls -lh ../build || true
+          test -f ../build/GRAVESPIRE-android-debug.apk
+          test -s ../build/GRAVESPIRE-android-debug.apk
+
+      - name: Upload Godot APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gravespire-godot-android-debug
+          path: build/GRAVESPIRE-android-debug.apk
+          if-no-files-found: error
+
+      - name: Publish Godot APK prerelease
+        if: github.event_name != 'pull_request' && github.ref_name == 'ChatGPT'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: chatgpt-godot-bay07-apk
+          name: GRAVESPIRE — ChatGPT Godot Bay 07 debug APK
+          body: |
+            Godot 4.7.2 + C++ GDExtension first-person Bay 07.
+
+            This is the retained Godot/C++ Bay 07 acceptance slice, separate from the ChatGPT MC-01→12 WebView APK.
+            Install this APK on Fold 6-class hardware.
+
+            Left thumb walks. Right side looks. One Action on what you can reach.
+            Walk to the pulpit pendant to operate Carrier 07-A.
+            The isolation gate will not take a shove while pressurized.
+          prerelease: true
+          make_latest: false
+          files: build/GRAVESPIRE-android-debug.apk
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

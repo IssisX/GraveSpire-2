@@ -8,18 +8,21 @@ namespace {
 
 constexpr double kGravity = 9.80665;
 constexpr double kFrameMassKg = 48000.0;
-constexpr double kFrameBaseStiffnessNpm = 7.5e6;
-constexpr double kFrameDampingNsPm = 3.4e5;
-constexpr double kFrameTorsionNmPrad = 2.2e7;
-constexpr double kFrameTorsionDamping = 7.0e5;
+constexpr double kFrameBaseStiffnessNpm = 1.08e7;
+constexpr double kFrameDampingNsPm = 5.6e5;
+constexpr double kFrameTorsionNmPrad = 3.4e7;
+constexpr double kFrameTorsionDamping = 2.2e7;
 constexpr double kYieldDeflectionM = 0.052;
 constexpr double kFailureDeflectionM = 0.24;
+constexpr double kPlasticFlow = 0.18;
+constexpr double kDamageStiffnessLoss = 0.22;
 constexpr double kGateAreaM2 = 7.5;
 constexpr double kGateInertiaKgM2 = 9600.0;
 constexpr double kGateDriveTorqueNm = 6.8e5;
 constexpr double kGatePressureArmM = 0.42;
 constexpr double kCableStiffnessNpm = 1.9e6;
 constexpr double kCableDampingNsPm = 8.0e4;
+constexpr double kJackForceN = -1.5e5;
 
 double clamp01(double value) {
   return std::clamp(value, 0.0, 1.0);
@@ -95,7 +98,8 @@ void Simulation::step_mechanics(double dt) {
 
   if (active(Command::GateVent)) {
     const double discharge = std::min(
-        gate.inventory_kg, (0.9 + 0.000012 * gate.pressure_pa) * dt);
+        gate.inventory_kg,
+        (3.8 + 0.000055 * gate.pressure_pa) * dt);
     gate.inventory_kg -= discharge;
     gate.pressure_pa = 420000.0 * gate.inventory_kg / 310.0;
   }
@@ -106,8 +110,7 @@ void Simulation::step_mechanics(double dt) {
   const double pressure_torque =
       gate.pressure_pa * kGateAreaM2 * kGatePressureArmM *
       std::max(0.12, std::cos(gate.angle_rad));
-  const double misalignment = std::abs(gate.seal_misalignment_m);
-  const double jam_multiplier = 1.0 + 24.0 * misalignment;
+  const double jam_multiplier = gate_jam_multiplier();
   double drive_torque = gate_axis * kGateDriveTorqueNm / jam_multiplier;
   if (gate.wedged) {
     drive_torque = 0.0;
@@ -126,9 +129,9 @@ void Simulation::step_mechanics(double dt) {
 
   const double carrier_force = freight.cable_tension_n;
   const double gate_force = gate.pressure_pa * kGateAreaM2;
-  const double jack_force = active(Command::FrameJack) ? -7.5e5 : 0.0;
+  const double jack_force = active(Command::FrameJack) ? kJackForceN : 0.0;
   const double stiffness = kFrameBaseStiffnessNpm *
-      (1.0 - 0.82 * frame.damage) + frame.brace_stiffness_npm;
+      (1.0 - kDamageStiffnessLoss * frame.damage) + frame.brace_stiffness_npm;
   const double frame_force = 0.42 * carrier_force +
       0.16 * gate_force + jack_force -
       stiffness * (frame.deflection_m - frame.plastic_set_m) -
@@ -149,7 +152,8 @@ void Simulation::step_mechanics(double dt) {
   if (std::abs(elastic_deflection) > kYieldDeflectionM) {
     const double excess =
         std::abs(elastic_deflection) - kYieldDeflectionM;
-    frame.plastic_set_m += std::copysign(0.24 * excess, elastic_deflection);
+    frame.plastic_set_m +=
+        std::copysign(kPlasticFlow * excess * dt, elastic_deflection);
   }
   const double demand = std::max(
       std::abs(frame.deflection_m), 1.7 * std::abs(frame.twist_rad));
@@ -177,8 +181,28 @@ bool Simulation::finite() const noexcept {
       std::isfinite(s.frame.twist_rad) &&
       std::isfinite(s.frame.damage) &&
       std::isfinite(s.gate.angle_rad) &&
-      std::isfinite(s.gate.pressure_pa);
+      std::isfinite(s.gate.pressure_pa) &&
+      std::abs(s.frame.deflection_m) < 2.5 &&
+      std::abs(s.frame.plastic_set_m) < 2.5;
+}
+
+double Simulation::gate_jam_multiplier() const noexcept {
+  return 1.0 + 24.0 * std::abs(state_.gate.seal_misalignment_m);
+}
+
+bool Simulation::gallery_passable() const noexcept {
+  return state_.gate.angle_rad > 0.95 && !state_.gate.wedged;
+}
+
+bool Simulation::neck_walk_clear() const noexcept {
+  return std::abs(state_.gate.seal_misalignment_m) < 0.018 ||
+      state_.frame.brace_connected;
+}
+
+bool Simulation::carrier_at_recv() const noexcept {
+  return state_.freight.lateral_m > 4.4 &&
+      state_.freight.height_m > 1.85 &&
+      state_.freight.height_m < 3.15;
 }
 
 }  // namespace gravespire
-

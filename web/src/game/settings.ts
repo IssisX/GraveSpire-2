@@ -13,6 +13,7 @@ export type Settings = {
   shadowRes: number;
   lightQuality: LightQuality;
   steamDensity: number;
+  atmosphereDensity: number;
   fov: number;
   shake: number;
   masterVolume: number;
@@ -32,6 +33,7 @@ export const DEFAULT_SETTINGS: Settings = {
   shadowRes: 1024,
   lightQuality: "high",
   steamDensity: 1,
+  atmosphereDensity: 1,
   fov: 72,
   shake: 0.55,
   masterVolume: 0.7,
@@ -52,6 +54,7 @@ function sanitize(raw: Partial<Settings> | null | undefined): Settings {
   s.pixelRatioCap = clamp(Number(s.pixelRatioCap) || 1.5, 0.7, 2);
   s.shadowRes = s.shadows === "high" ? 2048 : s.shadows === "low" ? 1024 : 512;
   s.steamDensity = clamp(Number(s.steamDensity) || 0, 0, 1);
+  s.atmosphereDensity = clamp(Number(s.atmosphereDensity) || 0, 0, 1);
   s.fov = clamp(Number(s.fov) || 72, 58, 90);
   s.shake = clamp(Number(s.shake) || 0, 0, 1);
   s.masterVolume = clamp(Number(s.masterVolume) || 0, 0, 1);

@@ -26,6 +26,7 @@ export function applyGraphics(
   const steamMat = level.bindings.steam.material as THREE.PointsMaterial;
   steamMat.opacity = 0.08 + 0.32 * settings.steamDensity;
   steamMat.size = 0.07 + 0.1 * settings.steamDensity;
+  level.atmosphere.setDensity(settings.atmosphereDensity);
 
   const low = settings.lightQuality === "low";
   for (const l of level.bindings.bayLights) {
@@ -33,7 +34,7 @@ export function applyGraphics(
     l.castShadow = false;
   }
   level.bindings.fill.intensity = low ? 0.32 : 0.85;
-  level.bindings.wellLamp.intensity = low ? 16 : 32;
+  level.atmosphere.setLampBase(level.bindings.wellLamp, low ? 16 : 32);
   level.bindings.hemi.intensity = low ? 0.72 : 1.05;
   level.bindings.amb.intensity = low ? 0.4 : 0.58;
   renderer.toneMappingExposure = low ? 1.18 : 1.32;

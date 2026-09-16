@@ -69,6 +69,9 @@ godot::Dictionary SimulationBridge::snapshot() const {
       state.authority_tick);
   out["carrier_height_m"] = state.freight.height_m;
   out["carrier_lateral_m"] = state.freight.lateral_m;
+  out["carrier_vy"] = state.freight.vertical_velocity_mps;
+  out["carrier_vx"] = state.freight.lateral_velocity_mps;
+  out["payload_kg"] = state.freight.payload_kg;
   out["cable_tension_n"] = state.freight.cable_tension_n;
   out["brake_temperature_k"] =
       state.freight.brake_temperature_k;
@@ -80,10 +83,15 @@ godot::Dictionary SimulationBridge::snapshot() const {
   out["brace_connected"] = state.frame.brace_connected;
   out["gate_angle_rad"] = state.gate.angle_rad;
   out["gate_pressure_pa"] = state.gate.pressure_pa;
+  out["gate_inventory_kg"] = state.gate.inventory_kg;
   out["gate_misalignment_m"] = state.gate.seal_misalignment_m;
   out["gate_wedged"] = state.gate.wedged;
+  out["gate_jam"] = simulation_.gate_jam_multiplier();
+  out["gallery_passable"] = simulation_.gallery_passable();
+  out["neck_walk_clear"] = simulation_.neck_walk_clear();
+  out["carrier_at_recv"] = simulation_.carrier_at_recv();
+  out["finite"] = simulation_.finite();
   return out;
 }
 
 }  // namespace gravespire
-

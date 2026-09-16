@@ -1,5 +1,6 @@
 import { carrierWorldPos } from "@/sim/geometry.ts";
 import * as THREE from "three";
+import { Atmosphere } from "./atmosphere.ts";
 import type { Collider } from "./collision.ts";
 import { createMaterials, makeSignTexture, type Materials } from "./materials.ts";
 
@@ -66,6 +67,7 @@ export type Level = {
   bindings: Bindings;
   materials: Materials;
   geos: THREE.BufferGeometry[];
+  atmosphere: Atmosphere;
   dispose: () => void;
 };
 
@@ -73,6 +75,7 @@ class Kit {
   colliders: Collider[] = [];
   interactables: Interactable[] = [];
   geos: THREE.BufferGeometry[] = [];
+  lamps: THREE.PointLight[] = [];
   constructor(
     public scene: THREE.Scene,
     public mats: Materials,
@@ -193,6 +196,7 @@ class Kit {
     l.position.set(x, y - 0.3, z);
     l.castShadow = false;
     this.scene.add(l);
+    this.lamps.push(l);
     return l;
   }
 
@@ -222,8 +226,12 @@ export function buildLevel(scene: THREE.Scene): Level {
   const bayLights: THREE.PointLight[] = [];
   const shopLights: THREE.Mesh[] = [];
 
-  scene.background = new THREE.Color(0x10151a);
-  scene.fog = new THREE.Fog(0x10151a, 52, 128);
+  // The older fog began beyond almost all Bay 07 sight-lines, leaving the
+  // structure to read as isolated meshes against a flat backdrop. Keep a
+  // long enough far plane to preserve the visible MC-01→12 descent, but let
+  // the industrial air establish depth in the rooms and shaft.
+  scene.background = new THREE.Color(0x171d23);
+  scene.fog = new THREE.Fog(0x1a2128, 18, 260);
 
   const hemi = new THREE.HemisphereLight(0xc5d0d8, 0x2e261c, 1.05);
   scene.add(hemi);
@@ -820,13 +828,37 @@ export function buildLevel(scene: THREE.Scene): Level {
     neckPlates,
   };
 
+  // This is presentation only: dust and shafts answer to live fixture
+  // output, never to invented game state. The web tower retains the
+  // candidate branch's atmospheric gain without changing the shared
+  // mechanical authority or adding a traversal surface.
+  const atmosphere = new Atmosphere(scene);
+  atmosphere.addLamp(wellLamp, {
+    restless: 0.18,
+    shaft: { radius: 3.8, length: 4.0, color: 0xffc07a, strength: 0.095 },
+  });
+  for (const fixture of k.lamps) {
+    const length = Math.max(2.8, Math.min(10.4, fixture.position.y - 0.3));
+    atmosphere.addLamp(fixture, {
+      restless: fixture.color.r > fixture.color.b ? 0.40 : 0.24,
+      shaft: {
+        radius: fixture.color.r > fixture.color.b ? 2.2 : 1.65,
+        length,
+        color: fixture.color.getHex(),
+        strength: fixture.color.r > fixture.color.b ? 0.062 : 0.044,
+      },
+    });
+  }
+
   return {
     colliders: k.colliders,
     interactables: k.interactables,
     bindings,
     materials: mats,
     geos: k.geos,
+    atmosphere,
     dispose: () => {
+      atmosphere.dispose();
       k.geos.forEach((g) => g.dispose());
       steamGeo.dispose();
       slingGeo.dispose();

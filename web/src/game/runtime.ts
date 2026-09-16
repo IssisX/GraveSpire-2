@@ -148,6 +148,10 @@ export function mountGame(canvas: HTMLCanvasElement) {
     });
   }
 
+  function tickAtmosphere(dt: number) {
+    level.atmosphere.update(dt, camera, Math.max(1, renderer.domElement.height));
+  }
+
   function flash(message: string) {
     useGame.getState().patch({ message });
     window.setTimeout(() => {
@@ -279,6 +283,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
         accAuth -= 1 / 30;
       }
       bindView();
+      tickAtmosphere(dt);
       renderer.render(scene, camera);
       requestAnimationFrame(loop);
       return;
@@ -320,6 +325,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
         skipOpening();
       }
       if (sim.state().authority_tick % 8 === 0) pushHud();
+      tickAtmosphere(dt);
       renderer.render(scene, camera);
       requestAnimationFrame(loop);
       return;
@@ -480,6 +486,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
       useGame.getState().patch({ phase: "ending", ending: endingCopy(sim.state()) });
     }
 
+    tickAtmosphere(dt);
     renderer.render(scene, camera);
     requestAnimationFrame(loop);
   }
