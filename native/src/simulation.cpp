@@ -21,8 +21,16 @@ constexpr double kGateInertiaKgM2 = 9600.0;
 constexpr double kGateDriveTorqueNm = 6.8e5;
 constexpr double kGatePressureArmM = 0.42;
 constexpr double kCableStiffnessNpm = 1.9e6;
-constexpr double kCableDampingNsPm = 8.0e4;
+constexpr double kCableDampingNsPm = 1.6e5;
 constexpr double kJackForceN = -1.5e5;
+constexpr double kPayoutMps = 0.35;
+constexpr double kBrakeRatedN = 1.5 * Simulation::kRatedPayloadKg * kGravity;
+constexpr double kBrakeThermalMassJPerK = 18000.0;
+constexpr double kBrakeSlipNsPm = 7.2e4;
+constexpr double kHeightMinM = 0.45;
+constexpr double kTwoBlockM = 0.55;
+constexpr double kCableMinM = 0.45;
+constexpr double kCableMaxM = 8.0;
 
 double clamp01(double value) {
   return std::clamp(value, 0.0, 1.0);
@@ -45,6 +53,10 @@ void Simulation::set_command(Command command, bool enabled) {
   }
 }
 
+void Simulation::set_payload_kg(double payload_kg) {
+  state_.freight.payload_kg = std::clamp(payload_kg, 80.0, 40000.0);
+}
+
 bool Simulation::active(Command command) const {
   return commands_.at(static_cast<std::size_t>(command));
 }
@@ -56,45 +68,90 @@ void Simulation::advance_authority_tick() {
   ++state_.authority_tick;
 }
 
+double Simulation::cable_geometry_m() const noexcept {
+  return (kWinchDeckM - state_.frame.deflection_m) - state_.freight.height_m;
+}
+
+double Simulation::cable_extension_m() const noexcept {
+  return cable_geometry_m() - state_.freight.cable_unstretched_m;
+}
+
+double Simulation::brake_hold_capacity_n() const noexcept {
+  const double thermal = std::clamp(
+      1.0 - (state_.freight.brake_temperature_k - 293.15) / 220.0,
+      0.12, 1.0);
+  return kBrakeRatedN * thermal;
+}
+
+bool Simulation::brake_slipping() const noexcept {
+  return state_.freight.brake_slipping;
+}
+
 void Simulation::step_mechanics(double dt) {
   auto& freight = state_.freight;
   auto& frame = state_.frame;
   auto& gate = state_.gate;
 
-  const double lift_axis =
-      static_cast<double>(active(Command::CarrierRaise)) -
-      static_cast<double>(active(Command::CarrierLower));
   const double traverse_axis =
       static_cast<double>(active(Command::CarrierRight)) -
       static_cast<double>(active(Command::CarrierLeft));
-
-  const double lift_accel = 1.35 * lift_axis;
-  freight.vertical_velocity_mps += lift_accel * dt;
   freight.lateral_velocity_mps += 1.1 * traverse_axis * dt;
-
-  if (freight.brake_engaged && lift_axis == 0.0) {
-    const double before = freight.vertical_velocity_mps;
-    freight.vertical_velocity_mps *= std::exp(-9.0 * dt);
-    const double dissipated = 0.5 * freight.payload_kg *
-        (before * before - freight.vertical_velocity_mps *
-         freight.vertical_velocity_mps);
-    freight.brake_temperature_k += std::max(0.0, dissipated) / 18000.0;
-  }
   freight.lateral_velocity_mps *= std::exp(-1.8 * dt);
-  freight.height_m = std::clamp(
-      freight.height_m + freight.vertical_velocity_mps * dt,
-      0.45, 7.6);
   freight.lateral_m = std::clamp(
-      freight.lateral_m + freight.lateral_velocity_mps * dt,
-      -5.8, 5.8);
+      freight.lateral_m + freight.lateral_velocity_mps * dt, -5.8, 5.8);
 
-  const double cable_extension = std::max(
-      0.0, frame.deflection_m - frame.plastic_set_m + 0.018);
+  const double geom = cable_geometry_m();
+  const double geom_dot =
+      -frame.velocity_mps - freight.vertical_velocity_mps;
+  const double extension = geom - freight.cable_unstretched_m;
+  freight.cable_tension_n = std::max(
+      0.0, kCableStiffnessNpm * extension + kCableDampingNsPm * geom_dot);
+
+  const double hold = brake_hold_capacity_n();
+  freight.brake_slipping = false;
+  if (freight.brake_engaged) {
+    if (freight.cable_tension_n > hold) {
+      freight.brake_slipping = true;
+      const double v_slip =
+          (freight.cable_tension_n - hold) / kBrakeSlipNsPm;
+      freight.cable_unstretched_m += v_slip * dt;
+      freight.brake_temperature_k +=
+          freight.cable_tension_n * v_slip * dt / kBrakeThermalMassJPerK;
+    }
+  } else {
+    const double payout_axis =
+        static_cast<double>(active(Command::CarrierLower)) -
+        static_cast<double>(active(Command::CarrierRaise));
+    freight.cable_unstretched_m += payout_axis * kPayoutMps * dt;
+  }
+  freight.cable_unstretched_m = std::clamp(
+      freight.cable_unstretched_m, kCableMinM, kCableMaxM);
+
+  const double geom_after = cable_geometry_m();
+  const double extension_after =
+      geom_after - freight.cable_unstretched_m;
   freight.cable_tension_n = std::max(
       0.0,
-      freight.payload_kg * (kGravity + lift_accel) +
-      kCableStiffnessNpm * cable_extension +
-      kCableDampingNsPm * frame.velocity_mps);
+      kCableStiffnessNpm * extension_after + kCableDampingNsPm * geom_dot);
+
+  const double mass = std::max(80.0, freight.payload_kg);
+  const double ay =
+      (freight.cable_tension_n - mass * kGravity) / mass;
+  freight.vertical_velocity_mps += ay * dt;
+  freight.height_m += freight.vertical_velocity_mps * dt;
+  const double height_max =
+      kWinchDeckM - frame.deflection_m - kTwoBlockM;
+  if (freight.height_m < kHeightMinM) {
+    freight.height_m = kHeightMinM;
+    if (freight.vertical_velocity_mps < 0.0) {
+      freight.vertical_velocity_mps = 0.0;
+    }
+  } else if (freight.height_m > height_max) {
+    freight.height_m = height_max;
+    if (freight.vertical_velocity_mps > 0.0) {
+      freight.vertical_velocity_mps = 0.0;
+    }
+  }
 
   if (active(Command::GateVent)) {
     const double discharge = std::min(
@@ -120,8 +177,7 @@ void Simulation::step_mechanics(double dt) {
       1.1e5 * gate.angular_velocity_radps;
   gate.angular_velocity_radps += gate_torque / kGateInertiaKgM2 * dt;
   gate.angle_rad = std::clamp(
-      gate.angle_rad + gate.angular_velocity_radps * dt,
-      0.0, 1.42);
+      gate.angle_rad + gate.angular_velocity_radps * dt, 0.0, 1.42);
   if ((gate.angle_rad == 0.0 && gate.angular_velocity_radps < 0.0) ||
       (gate.angle_rad == 1.42 && gate.angular_velocity_radps > 0.0)) {
     gate.angular_velocity_radps = 0.0;
@@ -177,6 +233,7 @@ bool Simulation::finite() const noexcept {
   const auto& s = state_;
   return std::isfinite(s.freight.height_m) &&
       std::isfinite(s.freight.cable_tension_n) &&
+      std::isfinite(s.freight.cable_unstretched_m) &&
       std::isfinite(s.frame.deflection_m) &&
       std::isfinite(s.frame.twist_rad) &&
       std::isfinite(s.frame.damage) &&
@@ -203,6 +260,14 @@ bool Simulation::carrier_at_recv() const noexcept {
   return state_.freight.lateral_m > 4.4 &&
       state_.freight.height_m > 1.85 &&
       state_.freight.height_m < 3.15;
+}
+
+bool Simulation::act1_shop_open() const noexcept {
+  return gallery_passable() && neck_walk_clear();
+}
+
+bool Simulation::act1_local_competence() const noexcept {
+  return act1_shop_open() && carrier_at_recv();
 }
 
 }  // namespace gravespire

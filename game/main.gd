@@ -9,10 +9,13 @@ var hud: SpireHud
 var carrier: AnimatableBody3D
 var payload: MeshInstance3D
 var cable: MeshInstance3D
+var cable_segs: Array[MeshInstance3D] = []
 var frame_beam: AnimatableBody3D
 var gate: AnimatableBody3D
 var brace_mesh: MeshInstance3D
 var neck_plate: AnimatableBody3D
+var neck_blocker: AnimatableBody3D
+var sheave: MeshInstance3D
 var recv_lamps: Array[OmniLight3D] = []
 var steam: MeshInstance3D
 var pendant: Area3D
@@ -150,7 +153,7 @@ func _physics_process(dt: float) -> void:
 	if bark_t > 0.0:
 		hint = bark
 	var inspect := _inspect(state)
-	hud.set_state(hint, inspect, operate_kind, player.hurt, player.dead)
+	hud.set_state(hint, inspect, operate_kind, player.hurt, player.dead, _objective(state))
 
 
 func _sync_machines(state: Dictionary) -> void:
@@ -160,26 +163,66 @@ func _sync_machines(state: Dictionary) -> void:
 	var twist: float = state["frame_twist_rad"]
 	var ang: float = state["gate_angle_rad"]
 	var mis: float = state["gate_misalignment_m"]
+	var tension: float = state["cable_tension_n"]
 	carrier.position = Vector3(lat, h, WELL_Z)
 	carrier.rotation.z = twist * 0.15
 	payload.position = Vector3(lat, h - 0.72, WELL_Z)
 	var top := 6.15 - defl
-	var cable_len := maxf(0.35, top - h - 0.35)
-	cable.scale = Vector3(1.0, cable_len / 4.0, 1.0)
-	cable.position = Vector3(lat, h + 0.45 + cable_len * 0.5, WELL_Z)
+	_sync_cable(Vector3(lat, top, WELL_Z), Vector3(lat, h + 0.42, WELL_Z), tension)
+	if sheave != null:
+		sheave.position = Vector3(lat, top + 0.22, WELL_Z)
 	frame_beam.position = Vector3(0.0, top, 0.0)
 	frame_beam.rotation.z = twist
 	gate.position = Vector3(7.15, 2.15 + defl * 0.4, 0.0)
 	gate.rotation = Vector3(mis * 0.6, -ang, 0.0)
 	brace_mesh.visible = bool(state["brace_connected"])
-	neck_plate.position = Vector3(6.55, maxf(-0.08, -mis * 4.5), 0.0)
+	# Racked neck is a raised collision lip, not a dropped cosmetic plate.
+	var neck_clear: bool = bool(state["neck_walk_clear"])
+	neck_plate.position = Vector3(6.55, 0.02 if neck_clear else 0.12, 0.0)
+	neck_plate.rotation.z = 0.0 if neck_clear else clampf(mis * 8.0, -0.28, 0.28)
+	if neck_blocker != null:
+		neck_blocker.position = Vector3(6.62, -0.85 if neck_clear else 0.78, 0.0)
 	var dock: bool = state["carrier_at_recv"]
 	for lamp in recv_lamps:
 		lamp.light_color = Color(0.45, 0.95, 0.55) if dock else Color(0.85, 0.28, 0.16)
 		lamp.light_energy = 2.4 if dock else 0.9
 	var p: float = state["gate_pressure_pa"]
-	steam.visible = p > 40000.0
-	steam.scale = Vector3.ONE * clampf(p / 420000.0, 0.2, 1.4)
+	steam.visible = p > 40000.0 or absf(mis) > 0.02
+	steam.scale = Vector3.ONE * clampf((p / 420000.0) + absf(mis) * 8.0, 0.2, 1.6)
+	steam.position = Vector3(7.0 + mis * 2.0, 1.4, 1.6)
+
+
+func _sync_cable(a: Vector3, b: Vector3, tension: float) -> void:
+	if cable_segs.is_empty():
+		return
+	var span := maxf(0.25, a.distance_to(b))
+	var sag := 0.02
+	if tension < 80.0:
+		sag = minf(span * 0.45, 1.85)
+	else:
+		sag = clampf(22.0 * span * span / tension, 0.016, span * 0.42)
+	var nseg := cable_segs.size()
+	for i in nseg:
+		var t0 := float(i) / float(nseg)
+		var t1 := float(i + 1) / float(nseg)
+		var p0 := a.lerp(b, t0)
+		var p1 := a.lerp(b, t1)
+		p0.y -= 4.0 * sag * t0 * (1.0 - t0)
+		p1.y -= 4.0 * sag * t1 * (1.0 - t1)
+		var mid := (p0 + p1) * 0.5
+		var delta := p1 - p0
+		var seglen := maxf(0.05, delta.length())
+		var seg: MeshInstance3D = cable_segs[i]
+		var y := delta / seglen
+		var x := y.cross(Vector3(0.0, 0.0, 1.0))
+		if x.length() < 0.2:
+			x = y.cross(Vector3(1.0, 0.0, 0.0))
+		x = x.normalized()
+		var z := x.cross(y).normalized()
+		var b := Basis(x, y, z).scaled(Vector3(1.0, seglen, 1.0))
+		seg.transform = Transform3D(b, mid)
+	if cable != null:
+		cable.visible = false
 
 
 func _context(state: Dictionary) -> void:
@@ -249,17 +292,25 @@ func _hint_for(id: String) -> String:
 
 func _inspect(state: Dictionary) -> String:
 	if look_id in ["pendant", "look_pendant", "carrier"]:
-		return "CARRIER 07-A   %0.0f kN   %s   h %0.2f  x %+0.2f" % [
+		var brake := "FREE"
+		if bool(state["brake_slipping"]):
+			brake = "SLIP"
+		elif bool(state["brake_engaged"]):
+			brake = "HOLD"
+		return "CARRIER 07-A   %0.0f kN  %s  L0 %0.2f m  h %0.2f  x %+0.2f  %0.0f °C" % [
 			state["cable_tension_n"] / 1000.0,
-			"BRAKE" if state["brake_engaged"] else "FREE",
+			brake,
+			state["cable_unstretched_m"],
 			state["carrier_height_m"],
 			state["carrier_lateral_m"],
+			state["brake_temperature_k"] - 273.15,
 		]
 	if look_id in ["gate_panel", "look_gate_panel"]:
-		return "ISOLATION GATE   %0.0f kPa   jam ×%0.1f   leaf %0.0f°" % [
+		return "ISOLATION GATE   %0.0f kPa   jam ×%0.1f   leaf %0.0f°   gap %+0.0f mm" % [
 			state["gate_pressure_pa"] / 1000.0,
 			state["gate_jam"],
 			rad_to_deg(state["gate_angle_rad"]),
+			state["gate_misalignment_m"] * 1000.0,
 		]
 	if look_id in ["jack", "look_jack"]:
 		return "TRANSFER FRAME   defl %+0.0f mm   set %+0.0f mm   %s" % [
@@ -267,10 +318,23 @@ func _inspect(state: Dictionary) -> String:
 			state["frame_plastic_set_m"] * 1000.0,
 			"BRACED" if state["brace_connected"] else "UNBRACED",
 		]
-	return "BAY 07   gallery %s   neck %s" % [
+	return "BAY 07   gallery %s   neck %s   07-A %s" % [
 		"OPEN" if state["gallery_passable"] else "BLOCKED",
 		"CLEAR" if state["neck_walk_clear"] else "RACKED",
+		"DOCKED" if state["carrier_at_recv"] else "OFF-RECV",
 	]
+
+
+func _objective(state: Dictionary) -> String:
+	if not bool(state.get("finite", true)):
+		return "BAY 07  unbounded — not a solvable state"
+	var shop := "OPEN" if bool(state["act1_shop_open"]) else "BLOCKED"
+	var recv := "DOCKED" if bool(state["carrier_at_recv"]) else "AWAY"
+	if bool(state["act1_local_competence"]):
+		return "BAY 07  shop OPEN  recv DOCKED"
+	if bool(state["brake_engaged"]) and operate_kind == "carrier":
+		return "BAY 07  shop %s  recv %s   hoist HOLDING" % [shop, recv]
+	return "BAY 07  shop %s  recv %s" % [shop, recv]
 
 
 func _npcs(dt: float, state: Dictionary) -> void:
@@ -283,10 +347,14 @@ func _npcs(dt: float, state: Dictionary) -> void:
 			body.position.x = lerpf(body.position.x, target_x, minf(1.0, 0.6 * dt))
 		if player.global_position.distance_to(body.global_position) < 2.2 and look_id == id:
 			bark = npc["line"]
-			if bool(state["gallery_passable"]) and id == "ilea":
+			if bool(state["act1_local_competence"]) and id == "chen":
+				bark = "Recv lamps are green and the shop route is a hole. I'm taking the crate through."
+			elif bool(state["gallery_passable"]) and id == "ilea":
 				bark = "East neck's walking. I'm taking the shop route."
 			elif bool(state["carrier_at_recv"]) and id == "chen":
 				bark = "Recv lamps are green. Don't celebrate until the leaf is honest."
+			elif bool(state["brake_slipping"]) and id == "rami":
+				bark = "That brake is slipping. Rated hold is gone. Watch the cable."
 
 
 func _mat(color: Color, metal := 0.72, rough := 0.42) -> StandardMaterial3D:
@@ -480,9 +548,32 @@ func _world() -> void:
 	payload = _mesh_box(Vector3(2.4, 1.35, 1.9), Color(0.55, 0.38, 0.16), 0.35, 0.6)
 	add_child(payload)
 	cable = _mesh_box(Vector3(0.09, 4.0, 0.09), Color(0.75, 0.78, 0.8), 0.9, 0.28)
+	cable.visible = false
 	add_child(cable)
+	for _i in 10:
+		var seg := _mesh_box(Vector3(0.07, 1.0, 0.07), Color(0.76, 0.78, 0.8), 0.92, 0.28)
+		add_child(seg)
+		cable_segs.append(seg)
+	sheave = MeshInstance3D.new()
+	var sheave_mesh := CylinderMesh.new()
+	sheave_mesh.top_radius = 0.22
+	sheave_mesh.bottom_radius = 0.22
+	sheave_mesh.height = 0.18
+	sheave_mesh.material = _mat(Color(0.55, 0.58, 0.6), 0.85, 0.3)
+	sheave.mesh = sheave_mesh
+	sheave.rotation_degrees.z = 90.0
+	add_child(sheave)
+	_static_box(Vector3(14.8, 0.22, 0.38), Vector3(0.0, 6.55, 0.0), Color(0.28, 0.3, 0.32))
 	gate = _anim_box(Vector3(0.55, 4.6, 4.3), Vector3(7.15, 2.15, 0.0), Color(0.22, 0.28, 0.32))
+	# Jambs/lintel so the leaf is the only hole. Walking around is not a secret route.
+	_static_box(Vector3(1.1, 4.8, 0.7), Vector3(7.15, 2.2, 2.55), Color(0.18, 0.2, 0.22))
+	_static_box(Vector3(1.1, 4.8, 0.7), Vector3(7.15, 2.2, -2.55), Color(0.18, 0.2, 0.22))
+	_static_box(Vector3(1.2, 0.55, 5.6), Vector3(7.15, 4.55, 0.0), Color(0.2, 0.22, 0.24))
+	# Pressure manifold to the vent panel — presentation of inventory, not a second fluid sim.
+	_static_box(Vector3(0.16, 0.16, 2.2), Vector3(6.85, 2.6, -1.2), Color(0.45, 0.22, 0.14), null)
+	_static_box(Vector3(0.18, 1.1, 0.18), Vector3(6.55, 1.9, -2.35), Color(0.45, 0.22, 0.14), null)
 	neck_plate = _anim_box(Vector3(1.6, 0.22, 3.6), Vector3(6.55, 0.0, 0.0), Color(0.4, 0.36, 0.28))
+	neck_blocker = _anim_box(Vector3(0.7, 1.55, 3.4), Vector3(6.62, -0.85, 0.0), Color(0.42, 0.32, 0.22))
 	brace_mesh = _mesh_box(Vector3(0.22, 3.4, 0.22), Color(0.82, 0.55, 0.18), 0.8, 0.3)
 	brace_mesh.position = Vector3(5.4, 1.7, -2.6)
 	brace_mesh.rotation_degrees.z = 18.0
@@ -517,7 +608,7 @@ func _world() -> void:
 		n.light_energy = 1.3
 		add_child(n)
 
-	_npc("rami", Vector3(-6.15, 0.42, 2.15), Color(0.72, 0.55, 0.38), "That leaf will not take a shove. Vent the isolation, then jack the rack. Brace if you want anyone else walking it.")
+	_npc("rami", Vector3(-6.15, 0.42, 2.15), Color(0.72, 0.55, 0.38), "Brake's holding the drum. Release it before you hoist. That leaf will not take a shove — vent, then jack the rack.")
 	_npc("chen", Vector3(1.4, 0.0, -5.4), Color(0.38, 0.52, 0.62), "Crib and crate on the south apron. I am not hauling 200 kilos by hand while that gate's still a wall.")
 	_npc("ilea", Vector3(9.6, 0.0, 0.35), Color(0.62, 0.42, 0.48), "Shop side. I can see you. I cannot reach you until that pressure comes off the hinge.")
 	_rigid(Vector3(0.55, 0.55, 0.55), Vector3(-1.1, 0.32, -5.6), 240.0, Color(0.45, 0.32, 0.16))

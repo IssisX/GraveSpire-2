@@ -76,6 +76,10 @@ godot::Dictionary SimulationBridge::snapshot() const {
   out["brake_temperature_k"] =
       state.freight.brake_temperature_k;
   out["brake_engaged"] = state.freight.brake_engaged;
+  out["brake_slipping"] = simulation_.brake_slipping();
+  out["brake_hold_n"] = simulation_.brake_hold_capacity_n();
+  out["cable_unstretched_m"] = state.freight.cable_unstretched_m;
+  out["cable_extension_m"] = simulation_.cable_extension_m();
   out["frame_deflection_m"] = state.frame.deflection_m;
   out["frame_twist_rad"] = state.frame.twist_rad;
   out["frame_plastic_set_m"] = state.frame.plastic_set_m;
@@ -90,6 +94,8 @@ godot::Dictionary SimulationBridge::snapshot() const {
   out["gallery_passable"] = simulation_.gallery_passable();
   out["neck_walk_clear"] = simulation_.neck_walk_clear();
   out["carrier_at_recv"] = simulation_.carrier_at_recv();
+  out["act1_shop_open"] = simulation_.act1_shop_open();
+  out["act1_local_competence"] = simulation_.act1_local_competence();
   out["finite"] = simulation_.finite();
   return out;
 }
