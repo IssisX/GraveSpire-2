@@ -32,8 +32,67 @@ constexpr double kTwoBlockM = 0.55;
 constexpr double kCableMinM = 0.45;
 constexpr double kCableMaxM = 8.0;
 
+constexpr double kSpireLiftCarKg = 22000.0;
+constexpr double kSpireLiftCounterKg = 18000.0;
+constexpr double kSpireLiftDriveN = 190000.0;
+constexpr double kSpireLiftHoldN = 135000.0;
+constexpr double kSpireLiftDamping = 18000.0;
+constexpr double kSpireLiftMaxSpeed = 3.5;
+constexpr double kSpireLiftContactM = 58.0;
+
+constexpr double kBridgeLatchTravelM = 0.12;
+constexpr double kBridgeLatchOverCenterM = 0.035;
+constexpr double kBridgeLatchClearM = 0.055;
+constexpr double kBridgeLatchK = 1.6e5;
+constexpr double kBridgeLatchC = 7.5e3;
+constexpr double kBridgeLatchDetentK = 9.0e4;
+constexpr double kBridgeMassKg = 48000.0;
+constexpr double kBridgeLengthM = 20.0;
+constexpr double kBridgeCounterKg = 20000.0;
+constexpr double kBridgeCounterArmM = 6.0;
+constexpr double kBridgeDamping = 2.8e5;
+constexpr double kBridgeInitialRad = 1.28;
+constexpr double kBridgeInertia =
+    kBridgeMassKg * kBridgeLengthM * kBridgeLengthM / 3.0 +
+    kBridgeCounterKg * kBridgeCounterArmM * kBridgeCounterArmM;
+
+constexpr double kSkyCarKg = 18000.0;
+constexpr double kSkyCounterBaseKg = 13000.0;
+constexpr double kSkyBallastKg = 10000.0;
+constexpr double kSkyBallastTravelM = 8.0;
+constexpr double kSkyBallastDriveN = 70000.0;
+constexpr double kSkyBallastDamping = 12000.0;
+constexpr double kSkyBallastMaxSpeed = 1.2;
+constexpr double kSkyCarDamping = 10000.0;
+constexpr double kSkyCarMaxSpeed = 2.4;
+constexpr double kSkyBrakeHoldN = 90000.0;
+constexpr double kSkyTopContactM = 68.0;
+
+constexpr double kWindLatchTravelM = 0.12;
+constexpr double kWindLatchOverCenterM = 0.035;
+constexpr double kWindLatchClearM = 0.055;
+constexpr double kWindLatchK = 1.6e5;
+constexpr double kWindLatchC = 7.5e3;
+constexpr double kWindLatchDetentK = 9.0e4;
+constexpr double kWindCarKg = 20000.0;
+constexpr double kWindCounterKg = 15000.0;
+constexpr double kWindCarDamping = 11000.0;
+constexpr double kWindCarMaxSpeed = 3.0;
+constexpr double kWindBrakeHoldN = 95000.0;
+constexpr double kAirDensityKgM3 = 1.18;
+constexpr double kWindMps = 15.5;
+constexpr double kWindSailAreaM2 = 520.0;
+constexpr double kWindCd = 1.12;
+
+constexpr double kBrakeCooling = 0.035;
+
 double clamp01(double value) {
   return std::clamp(value, 0.0, 1.0);
+}
+
+double smooth01(double value) {
+  const double x = clamp01(value);
+  return x * x * (3.0 - 2.0 * x);
 }
 
 }  // namespace
@@ -50,6 +109,10 @@ void Simulation::set_command(Command command, bool enabled) {
     state_.frame.brace_stiffness_npm = 0.0;
   } else if (command == Command::GateWedge && enabled) {
     state_.gate.wedged = !state_.gate.wedged;
+  } else if (command == Command::SkyCarBrake && enabled) {
+    state_.spire.sky_car_brake_engaged = !state_.spire.sky_car_brake_engaged;
+  } else if (command == Command::WindCarBrake && enabled) {
+    state_.spire.wind_car_brake_engaged = !state_.spire.wind_car_brake_engaged;
   }
 }
 
@@ -221,8 +284,178 @@ void Simulation::step_mechanics(double dt) {
   gate.seal_misalignment_m =
       0.62 * frame.deflection_m + 0.85 * frame.twist_rad;
   freight.brake_temperature_k +=
-      (293.15 - freight.brake_temperature_k) * 0.035 * dt;
+      (293.15 - freight.brake_temperature_k) * kBrakeCooling * dt;
+
+  step_spire(dt);
   ++state_.mechanics_step;
+}
+
+void Simulation::step_spire(double dt) {
+  auto& s = state_.spire;
+
+  const double lift_axis =
+      static_cast<double>(active(Command::SpireLiftUp)) -
+      static_cast<double>(active(Command::SpireLiftDown));
+  const double lift_drive = lift_axis * kSpireLiftDriveN;
+  const double lift_gravity = (kSpireLiftCounterKg - kSpireLiftCarKg) * kGravity;
+  double lift_force = lift_drive + lift_gravity - kSpireLiftDamping * s.lift_velocity_mps;
+  s.lift_brake_engaged = lift_axis == 0.0;
+  s.lift_brake_slipping = false;
+  if (s.lift_brake_engaged) {
+    if (std::abs(lift_force) <= kSpireLiftHoldN) {
+      s.lift_velocity_mps *= std::exp(-18.0 * dt);
+      lift_force = 0.0;
+    } else {
+      s.lift_brake_slipping = true;
+      lift_force -= std::copysign(kSpireLiftHoldN, lift_force);
+      s.lift_brake_temperature_k +=
+          std::abs(kSpireLiftHoldN * s.lift_velocity_mps) * dt / 22000.0;
+    }
+  }
+
+  const double latch_target = std::clamp(
+      (s.lift_q_m - kSpireLiftContactM) * 0.12, 0.0, kBridgeLatchTravelM);
+  const double latch_target_v =
+      s.lift_q_m > kSpireLiftContactM ? s.lift_velocity_mps * 0.12 : 0.0;
+  const double latch_contact =
+      kBridgeLatchK * (latch_target - s.bridge_latch_m) +
+      kBridgeLatchC * (latch_target_v - s.bridge_latch_velocity_mps);
+  s.bridge_latch_velocity_mps += latch_contact / 30.0 * dt;
+  s.bridge_latch_m += s.bridge_latch_velocity_mps * dt;
+  const double bridge_detent_target =
+      s.bridge_latch_m >= kBridgeLatchOverCenterM ? kBridgeLatchTravelM : 0.0;
+  s.bridge_latch_velocity_mps +=
+      kBridgeLatchDetentK * (bridge_detent_target - s.bridge_latch_m) / 30.0 * dt;
+  s.bridge_latch_m = std::clamp(s.bridge_latch_m, 0.0, kBridgeLatchTravelM);
+  if (latch_contact > 0.0) lift_force -= latch_contact * 0.12;
+
+  const double lift_mass = kSpireLiftCarKg + kSpireLiftCounterKg;
+  s.lift_velocity_mps += lift_force / lift_mass * dt;
+  s.lift_velocity_mps = std::clamp(
+      s.lift_velocity_mps, -kSpireLiftMaxSpeed, kSpireLiftMaxSpeed);
+  s.lift_q_m += s.lift_velocity_mps * dt;
+  if (s.lift_q_m <= 0.0) {
+    s.lift_q_m = 0.0;
+    if (s.lift_velocity_mps < 0.0) s.lift_velocity_mps = 0.0;
+  } else if (s.lift_q_m >= kSpireLiftTravelM) {
+    s.lift_q_m = kSpireLiftTravelM;
+    if (s.lift_velocity_mps > 0.0) s.lift_velocity_mps = 0.0;
+  }
+  s.lift_brake_temperature_k +=
+      (293.15 - s.lift_brake_temperature_k) * kBrakeCooling * dt;
+
+  if (s.bridge_latch_m >= kBridgeLatchClearM) {
+    const double bridge_gravity =
+        -kBridgeMassKg * kGravity * (kBridgeLengthM * 0.5) *
+            std::cos(s.bridge_angle_rad) +
+        kBridgeCounterKg * kGravity * kBridgeCounterArmM *
+            std::cos(s.bridge_angle_rad);
+    const double bridge_torque =
+        bridge_gravity - kBridgeDamping * s.bridge_angular_velocity_radps;
+    s.bridge_angular_velocity_radps += bridge_torque / kBridgeInertia * dt;
+    s.bridge_angle_rad += s.bridge_angular_velocity_radps * dt;
+  }
+  if (s.bridge_angle_rad <= 0.0) {
+    s.bridge_angle_rad = 0.0;
+    if (s.bridge_angular_velocity_radps < 0.0) s.bridge_angular_velocity_radps = 0.0;
+  } else if (s.bridge_angle_rad > kBridgeInitialRad) {
+    s.bridge_angle_rad = kBridgeInitialRad;
+    if (s.bridge_angular_velocity_radps > 0.0) s.bridge_angular_velocity_radps = 0.0;
+  }
+
+  const double ballast_axis =
+      static_cast<double>(active(Command::SkyBallastRight)) -
+      static_cast<double>(active(Command::SkyBallastLeft));
+  const double ballast_force =
+      ballast_axis * kSkyBallastDriveN -
+      kSkyBallastDamping * s.sky_ballast_velocity_mps;
+  s.sky_ballast_velocity_mps += ballast_force / kSkyBallastKg * dt;
+  s.sky_ballast_velocity_mps = std::clamp(
+      s.sky_ballast_velocity_mps, -kSkyBallastMaxSpeed, kSkyBallastMaxSpeed);
+  s.sky_ballast_x_m += s.sky_ballast_velocity_mps * dt;
+  if (s.sky_ballast_x_m <= 0.0) {
+    s.sky_ballast_x_m = 0.0;
+    if (s.sky_ballast_velocity_mps < 0.0) s.sky_ballast_velocity_mps = 0.0;
+  } else if (s.sky_ballast_x_m >= kSkyBallastTravelM) {
+    s.sky_ballast_x_m = kSkyBallastTravelM;
+    if (s.sky_ballast_velocity_mps > 0.0) s.sky_ballast_velocity_mps = 0.0;
+  }
+
+  const double support_fraction = smooth01((s.sky_ballast_x_m - 5.0) / 2.0);
+  const double sky_counter_kg =
+      kSkyCounterBaseKg + support_fraction * kSkyBallastKg;
+  double sky_force =
+      (sky_counter_kg - kSkyCarKg) * kGravity -
+      kSkyCarDamping * s.sky_car_velocity_mps;
+  s.sky_car_brake_slipping = false;
+  if (s.sky_car_brake_engaged) {
+    if (std::abs(sky_force) <= kSkyBrakeHoldN) {
+      s.sky_car_velocity_mps *= std::exp(-18.0 * dt);
+      sky_force = 0.0;
+    } else {
+      s.sky_car_brake_slipping = true;
+      sky_force -= std::copysign(kSkyBrakeHoldN, sky_force);
+    }
+  }
+
+  const double wind_latch_target = std::clamp(
+      (s.sky_car_q_m - kSkyTopContactM) * 0.12, 0.0, kWindLatchTravelM);
+  const double wind_latch_target_v =
+      s.sky_car_q_m > kSkyTopContactM ? s.sky_car_velocity_mps * 0.12 : 0.0;
+  const double wind_latch_contact =
+      kWindLatchK * (wind_latch_target - s.wind_latch_m) +
+      kWindLatchC * (wind_latch_target_v - s.wind_latch_velocity_mps);
+  s.wind_latch_velocity_mps += wind_latch_contact / 30.0 * dt;
+  s.wind_latch_m += s.wind_latch_velocity_mps * dt;
+  const double wind_detent_target =
+      s.wind_latch_m >= kWindLatchOverCenterM ? kWindLatchTravelM : 0.0;
+  s.wind_latch_velocity_mps +=
+      kWindLatchDetentK * (wind_detent_target - s.wind_latch_m) / 30.0 * dt;
+  s.wind_latch_m = std::clamp(s.wind_latch_m, 0.0, kWindLatchTravelM);
+  if (wind_latch_contact > 0.0) sky_force -= wind_latch_contact * 0.12;
+
+  const double sky_mass = kSkyCarKg + sky_counter_kg;
+  s.sky_car_velocity_mps += sky_force / sky_mass * dt;
+  s.sky_car_velocity_mps = std::clamp(
+      s.sky_car_velocity_mps, -kSkyCarMaxSpeed, kSkyCarMaxSpeed);
+  s.sky_car_q_m += s.sky_car_velocity_mps * dt;
+  if (s.sky_car_q_m <= 0.0) {
+    s.sky_car_q_m = 0.0;
+    if (s.sky_car_velocity_mps < 0.0) s.sky_car_velocity_mps = 0.0;
+  } else if (s.sky_car_q_m >= kSkyCarTravelM) {
+    s.sky_car_q_m = kSkyCarTravelM;
+    if (s.sky_car_velocity_mps > 0.0) s.sky_car_velocity_mps = 0.0;
+  }
+
+  const double q_dyn = 0.5 * kAirDensityKgM3 * kWindMps * kWindMps;
+  const double wind_drive_n = q_dyn * kWindSailAreaM2 * kWindCd;
+  const bool wind_unlocked = s.wind_latch_m >= kWindLatchClearM;
+  double wind_force =
+      (wind_unlocked ? wind_drive_n : 0.0) +
+      (kWindCounterKg - kWindCarKg) * kGravity -
+      kWindCarDamping * s.wind_car_velocity_mps;
+  s.wind_car_brake_slipping = false;
+  if (s.wind_car_brake_engaged || !wind_unlocked) {
+    if (std::abs(wind_force) <= kWindBrakeHoldN || !wind_unlocked) {
+      s.wind_car_velocity_mps *= std::exp(-18.0 * dt);
+      wind_force = 0.0;
+    } else {
+      s.wind_car_brake_slipping = true;
+      wind_force -= std::copysign(kWindBrakeHoldN, wind_force);
+    }
+  }
+  const double wind_mass = kWindCarKg + kWindCounterKg;
+  s.wind_car_velocity_mps += wind_force / wind_mass * dt;
+  s.wind_car_velocity_mps = std::clamp(
+      s.wind_car_velocity_mps, -kWindCarMaxSpeed, kWindCarMaxSpeed);
+  s.wind_car_q_m += s.wind_car_velocity_mps * dt;
+  if (s.wind_car_q_m <= 0.0) {
+    s.wind_car_q_m = 0.0;
+    if (s.wind_car_velocity_mps < 0.0) s.wind_car_velocity_mps = 0.0;
+  } else if (s.wind_car_q_m >= kWindCarTravelM) {
+    s.wind_car_q_m = kWindCarTravelM;
+    if (s.wind_car_velocity_mps > 0.0) s.wind_car_velocity_mps = 0.0;
+  }
 }
 
 const WorldState& Simulation::state() const noexcept {
@@ -239,6 +472,13 @@ bool Simulation::finite() const noexcept {
       std::isfinite(s.frame.damage) &&
       std::isfinite(s.gate.angle_rad) &&
       std::isfinite(s.gate.pressure_pa) &&
+      std::isfinite(s.spire.lift_q_m) &&
+      std::isfinite(s.spire.bridge_latch_m) &&
+      std::isfinite(s.spire.bridge_angle_rad) &&
+      std::isfinite(s.spire.sky_ballast_x_m) &&
+      std::isfinite(s.spire.sky_car_q_m) &&
+      std::isfinite(s.spire.wind_latch_m) &&
+      std::isfinite(s.spire.wind_car_q_m) &&
       std::abs(s.frame.deflection_m) < 2.5 &&
       std::abs(s.frame.plastic_set_m) < 2.5;
 }
@@ -268,6 +508,19 @@ bool Simulation::act1_shop_open() const noexcept {
 
 bool Simulation::act1_local_competence() const noexcept {
   return act1_shop_open() && carrier_at_recv();
+}
+
+bool Simulation::spire_bridge_walkable() const noexcept {
+  return state_.spire.bridge_latch_m >= kBridgeLatchClearM &&
+      state_.spire.bridge_angle_rad < 0.08;
+}
+
+bool Simulation::spire_sky_ballast_loaded() const noexcept {
+  return state_.spire.sky_ballast_x_m > 6.5;
+}
+
+bool Simulation::spire_wind_unlocked() const noexcept {
+  return state_.spire.wind_latch_m >= kWindLatchClearM;
 }
 
 }  // namespace gravespire
