@@ -1,17 +1,21 @@
 extends CharacterBody3D
 class_name SpirePlayer
 
-const WALK := 2.55
-const SPRINT := 4.85
-const CROUCH_SPEED := 1.15
+const WALK := 2.8
+const SPRINT := 6.0
+const CROUCH_SPEED := 1.25
 const GRAVITY := 9.80665
-const JUMP_V := 3.55
-const COYOTE := 0.14
+const JUMP_V := 4.25
+const COYOTE := 0.15
 const EYE := 1.62
 const EYE_CROUCH := 0.96
 const CAP_H := 1.72
 const CAP_H_CROUCH := 1.05
 const LOOK_SENS := 0.0024
+const PLAYER_MASS_KG := 85.0
+const AIR_DENSITY := 1.18
+const CHUTE_AREA_M2 := 18.0
+const CHUTE_CD := 1.35
 
 var yaw := -1.15
 var pitch := 0.08
@@ -31,6 +35,11 @@ var mantle_t := 0.0
 var mantle_to := Vector3.ZERO
 var hurt := false
 var dead := false
+
+var chute_deployed := false
+var fall_bark := ""
+var fall_bark_t := 0.0
+var fall_bark_stage := 0
 
 var move_axis := Vector2.ZERO
 var look_axis := Vector2.ZERO
@@ -70,7 +79,7 @@ func _ready() -> void:
 	cam = Camera3D.new()
 	cam.fov = 72.0
 	cam.near = 0.08
-	cam.far = 420.0
+	cam.far = 950.0
 	cam_boom.add_child(cam)
 	cam.current = true
 
@@ -93,6 +102,10 @@ func _physics_process(dt: float) -> void:
 
 	_poll_desktop()
 	landed = 0.0
+	fall_bark_t = maxf(0.0, fall_bark_t - dt)
+	if fall_bark_t <= 0.0:
+		fall_bark = ""
+
 	if mantle_t > 0.0:
 		_step_mantle(dt)
 		return
@@ -113,10 +126,16 @@ func _physics_process(dt: float) -> void:
 	var mag := move_axis.length()
 	sprinting = (not crouch) and is_on_floor() and (sprint_held or mag > 0.86)
 	var max_sp := CROUCH_SPEED if crouch else (SPRINT if sprinting else WALK)
+	if sprinting:
+		# Full sprint is forward-biased; side cuts stay athletic instead of ice-skating.
+		max_sp *= lerpf(0.72, 1.0, clampf(move_axis.y, 0.0, 1.0))
 	var wish := (forward * move_axis.y + right * move_axis.x)
 	if wish.length() > 1.0:
 		wish = wish.normalized()
-	var accel := 18.0 if is_on_floor() else 4.5
+	var grounded_now := is_on_floor()
+	var accel := 22.0 if grounded_now else 4.2
+	if grounded_now and wish.length() < 0.05:
+		accel = 30.0
 	var target := wish * max_sp
 	var prev_h := Vector3(velocity.x, 0.0, velocity.z)
 	velocity.x = lerpf(velocity.x, target.x, minf(1.0, accel * dt))
@@ -125,21 +144,33 @@ func _physics_process(dt: float) -> void:
 	var acc := (new_h - prev_h) / maxf(dt, 1e-4)
 	forward_accel = acc.dot(forward)
 
-	var was_ground := is_on_floor()
+	var was_ground := grounded_now
 	if was_ground:
 		coyote = COYOTE
 		air_time = 0.0
 		fall_from = global_position.y
+		fall_bark_stage = 0
 	else:
 		coyote -= dt
 		air_time += dt
 
 	if on_ladder:
-		velocity.y = move_axis.y * 2.45
+		velocity.y = move_axis.y * 2.65
 		velocity.x = lerpf(velocity.x, wish.x * 0.7, minf(1.0, 12.0 * dt))
 		velocity.z = lerpf(velocity.z, wish.z * 0.7, minf(1.0, 12.0 * dt))
 	else:
-		velocity.y -= GRAVITY * dt
+		if chute_deployed:
+			var fall_speed := maxf(0.0, -velocity.y)
+			var drag_acc := 0.5 * AIR_DENSITY * CHUTE_CD * CHUTE_AREA_M2 * fall_speed * fall_speed / PLAYER_MASS_KG
+			velocity.y += (-GRAVITY + drag_acc) * dt
+		else:
+			velocity.y -= GRAVITY * dt
+
+		# High-altitude crosswind is embodiment physics, not a rescue script.
+		var exposure := clampf((global_position.y - 78.0) / 250.0, 0.0, 1.0)
+		var wind_dir := Vector3(0.93, 0.0, 0.36).normalized()
+		var wind_accel := exposure * (2.8 if chute_deployed else 0.38)
+		velocity += wind_dir * wind_accel * dt
 
 	if jump_buf > 0.0:
 		jump_buf -= dt
@@ -152,22 +183,35 @@ func _physics_process(dt: float) -> void:
 		jump_buf = 0.0
 		floor_snap_length = 0.0
 	elif want_jump and not is_on_floor():
-		if _try_mantle():
+		if not chute_deployed and global_position.y > 18.0 and velocity.y < -7.0 and air_time > 0.35:
+			_deploy_chute()
+			jump_buf = 0.0
+		elif not chute_deployed and _try_mantle():
 			jump_buf = 0.0
 			return
 
 	if not on_ladder:
 		floor_snap_length = 0.22 if (is_on_floor() or coyote > 0.0) else 0.0
 
+	_update_fall_barks()
+	var pre_move_vy := velocity.y
 	move_and_slide()
 	_step_over()
 
 	if not was_ground and is_on_floor():
 		var drop := fall_from - global_position.y
 		landed = clampf((drop - 0.35) / 4.2, 0.0, 1.0)
-		_apply_fall(drop)
+		_apply_fall(drop, absf(pre_move_vy))
+		if chute_deployed and not dead:
+			fall_bark = [
+				"Nailed it. Absolutely intentional.",
+				"Still alive. Gravity can file a complaint.",
+				"Perfect landing. Do not inspect the pants."
+			][int(floor(global_position.y + global_position.x)) % 3]
+			fall_bark_t = 3.2
+		chute_deployed = false
 
-	if global_position.y < -10.6:
+	if global_position.y < -45.0:
 		dead = true
 
 	speed = Vector3(velocity.x, 0.0, velocity.z).length()
@@ -185,16 +229,44 @@ func _physics_process(dt: float) -> void:
 	on_ladder = false
 
 
+func _deploy_chute() -> void:
+	chute_deployed = true
+	fall_bark = "OH, THANK FUCK — CHUTE!"
+	fall_bark_t = 2.4
+	fall_bark_stage = maxi(fall_bark_stage, 3)
+
+
+func _update_fall_barks() -> void:
+	if is_on_floor() or velocity.y > -6.0:
+		return
+	if air_time > 1.1 and fall_bark_stage < 1:
+		fall_bark = "Ohhh shit. That's a long way down."
+		fall_bark_t = 2.0
+		fall_bark_stage = 1
+	elif air_time > 3.0 and fall_bark_stage < 2:
+		fall_bark = "FUCK FUCK FUCK — find steel or pull the chute!"
+		fall_bark_t = 2.4
+		fall_bark_stage = 2
+	elif air_time > 6.0 and not chute_deployed and fall_bark_stage < 4:
+		fall_bark = "THIS WAS A TERRIBLE FUCKING ROUTE!"
+		fall_bark_t = 2.8
+		fall_bark_stage = 4
+
+
 func _apply_camera() -> void:
 	var g := gait.offset()
 	cam_boom.position = Vector3(g["x"], eye + g["y"], g["z"])
 	cam_boom.rotation = Vector3(pitch + g["pitch"], yaw + g["yaw"], g["roll"])
+	if chute_deployed:
+		cam.fov = lerpf(cam.fov, 78.0, 0.08)
+	else:
+		cam.fov = lerpf(cam.fov, 72.0, 0.08)
 
 
 func _step_mantle(dt: float) -> void:
 	mantle_t -= dt
-	var t := 1.0 - clampf(mantle_t / 0.32, 0.0, 1.0)
-	global_position = global_position.lerp(mantle_to, minf(1.0, t * 3.0))
+	var t := 1.0 - clampf(mantle_t / 0.26, 0.0, 1.0)
+	global_position = global_position.lerp(mantle_to, minf(1.0, t * 3.7))
 	velocity = Vector3.ZERO
 	if mantle_t <= 0.0:
 		global_position = mantle_to
@@ -206,25 +278,24 @@ func _try_mantle() -> bool:
 	var space := get_world_3d().direct_space_state
 	var origin := global_position + Vector3(0.0, 0.95, 0.0)
 	var fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
-	var q := PhysicsRayQueryParameters3D.create(origin, origin + fwd * 0.9)
+	var q := PhysicsRayQueryParameters3D.create(origin, origin + fwd * 1.0)
 	q.exclude = [get_rid()]
 	q.collision_mask = 1
 	var hit := space.intersect_ray(q)
 	if hit.is_empty():
 		return false
-	var probe: Vector3 = hit.position + fwd * 0.18 + Vector3(0.0, 1.38, 0.0)
-	var down := PhysicsRayQueryParameters3D.create(probe, probe + Vector3(0.0, -1.2, 0.0))
+	var probe: Vector3 = hit.position + fwd * 0.18 + Vector3(0.0, 1.42, 0.0)
+	var down := PhysicsRayQueryParameters3D.create(probe, probe + Vector3(0.0, -1.3, 0.0))
 	down.exclude = [get_rid()]
 	down.collision_mask = 1
 	var ledge := space.intersect_ray(down)
 	if ledge.is_empty():
 		return false
 	var dy: float = ledge.position.y - global_position.y
-	if dy < 0.5 or dy > 1.35:
+	if dy < 0.45 or dy > 1.42:
 		return false
-	# Destination must actually exist; do not invent support.
 	mantle_to = Vector3(ledge.position.x, ledge.position.y + 0.03, ledge.position.z)
-	mantle_t = 0.32
+	mantle_t = 0.26
 	return true
 
 
@@ -243,19 +314,19 @@ func _step_over() -> void:
 	if hit.is_empty():
 		return
 	var rise: float = hit.position.y - global_position.y
-	if rise > 0.04 and rise <= 0.4:
+	if rise > 0.04 and rise <= 0.42:
 		global_position.y = hit.position.y + 0.01
 
 
-func _apply_fall(drop: float) -> void:
-	if drop > 8.5:
+func _apply_fall(drop: float, impact_speed: float) -> void:
+	if impact_speed > 15.5:
 		dead = true
 		gait.impulse(1.0)
-	elif drop > 4.8:
+	elif impact_speed > 10.5:
 		hurt = true
-		gait.impulse(0.55)
+		gait.impulse(0.58)
 	elif drop > 0.8:
-		gait.impulse(drop * 0.08)
+		gait.impulse(clampf(drop * 0.07, 0.08, 0.5))
 
 
 func look_origin() -> Vector3:
