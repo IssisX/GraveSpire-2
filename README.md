@@ -1,25 +1,41 @@
 # GRAVESPIRE
 
-GRAVESPIRE is a Godot 4.7 industrial immersive simulation targeting
-Android. The player changes what a persistent megastructure can physically
-do by operating, loading, bracing, rerouting, and breaking coupled machinery
-and structure.
+GRAVESPIRE is a Godot 4.7-targeted first-person industrial immersive simulation for Android. The player changes what one persistent megastructure can physically do by operating, loading, bracing, rerouting, breaking, riding, and repurposing coupled machinery and structure.
 
-`docs/GRAVESPIRE-GDD.md` is the binding design authority. Source, tests,
-automation, and builds in this repository are the implementation authority.
+`docs/GRAVESPIRE-GDD.md` is the binding design authority. Live source, tests, automation, builds, and runtime evidence are implementation truth.
 
-## Current executable slice
+## Current consolidation state
 
-The opening engineering cell couples three player-manipulable macro systems
-through one portable C++ authority:
+`ChatGPT` is the active consolidation branch. It retains two deliberately distinct execution substrates:
 
-- suspended freight carrier;
-- load-transfer frame;
-- pressure isolation gate.
+- `web/` + `android/`: the current MC-01→MC-12 vertical machine-skyscraper prototype, including the shared generalized-coordinate mechanical network, athletic traversal, high-altitude fall/recovery loop, atmospheric depth, and Android WebView APK path.
+- `game/` + `native/`: the Godot 4.7.2 + portable C++ Bay 07 acceptance slice, retained as the path toward the GDD's final authority architecture rather than treated as a replacement for the taller prototype.
 
-The slice proves the ownership and coupling path. It is not a claim that the
-finished nonlinear frame, contact, fracture, or mobile performance contracts
-already exist.
+The branch salvage record is in `docs/BRANCH-SALVAGE-MAP.md`.
+
+## Native Bay 07 authority
+
+Portable C++ owns consequential Bay 07 freight/frame/gate state. Godot issues typed commands and renders committed snapshots.
+
+Current native slice includes:
+
+- Fold-first move/look/contextual Action;
+- athletic first-person locomotion and moving-support inheritance;
+- Carrier 07-A operated locally from its pendant;
+- tension-only hoist cable with authoritative unstretched length;
+- raise/lower changes winch payout instead of teleporting the carrier;
+- finite holding brake with temperature-dependent derate and overload slip;
+- pressure isolation gate, frame jack/brace, route predicates, and persistent plastic set;
+- Act I local competence derived from a physically open shop route plus carrier receiving-envelope state;
+- Android arm64 Godot export automation.
+
+This is not a claim of final GDD co-rotational structure, arbitrary 6-DOF consequential contact, fracture-energy, or adaptive-reduction completeness.
+
+## Web machine-skyscraper prototype
+
+The current web/Android prototype grows Bay 07 into a continuous stacked sequence of giant mechanisms through MC-12. It is the gameplay proving ground for large-scale causal chains, parkour, moving machinery, wind exposure, long falls, parachute recovery, loose consequential ingredients, and physical handoffs between mechanisms.
+
+Its reduced generalized-coordinate mechanics are useful implementation evidence, but they do not supersede the GDD requirement that final critical simulation authority live in portable C++.
 
 ## Build native reference tests
 
@@ -29,8 +45,6 @@ make test
 
 ## Build the Godot extension
 
-Clone the pinned `godot-cpp` submodule, install SCons, then run:
-
 ```sh
 git submodule update --init --recursive
 python -m pip install scons
@@ -39,24 +53,9 @@ scons api_version=4.7 platform=linux target=template_debug
 
 Open `game/project.godot` with Godot 4.7.2.
 
-## Authority boundary
+## Android builds
 
-The C++ core owns consequential simulation state and committed outcomes.
-Godot scripts issue commands and render snapshots. Presentation cannot decide
-that a structure broke, a machine succeeded, or a route became valid.
+- WebView skyscraper workflow: `.github/workflows/chatgpt-apk.yml`
+- Native Godot Bay 07 workflow: `.github/workflows/godot-android.yml`
 
-## Grok branch — Act I Android APK
-
-`main` stays the Godot 4.7 + C++ coupling cell. This **Grok** branch keeps that
-tree and adds a playable Act I debug APK:
-
-- `web/` — TypeScript authority + Three.js first-person bay (touch-first)
-- `android/` — WebView wrapper (WebViewAssetLoader, fold/unfold safe)
-- `.github/workflows/android-apk.yml` — builds the APK and publishes
-  the `grok-act1-apk` prerelease
-
-Install: open https://github.com/IssisX/GraveSpire-2/releases/tag/grok-act1-apk
-and tap `gravespire-act1-debug.apk`. Allow unknown sources if Android asks.
-
-This APK is **not** GDD §7/§16 co-rotational completeness, and it is **not**
-the Godot mobile export.
+The two APKs are intentionally labelled separately so build/runtime claims do not get conflated.
