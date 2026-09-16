@@ -94,7 +94,7 @@ function restingOnSkyCar(chain: LinkedCascadeState, spec: IngredientSpec): boole
   const y = mechDof(chain.network, idY(spec.id)).q;
   const car = mechDof(chain.network, MECH_ID.mc11SkyCar);
   const carY = SKY.skyCarBaseY + car.q;
-  return x >= SKY.skyCarX - 3.0 && x <= SKY.skyCarX + 3.0 && Math.abs((y.q - spec.sizeY * 0.5) - carY) < 0.08;
+  return x >= SKY.skyCarX - 3.0 && x <= SKY.skyCarX + 3.0 && Math.abs((y - spec.sizeY * 0.5) - carY) < 0.08;
 }
 
 export function applyCompositionBodyForces(chain: LinkedCascadeState, forces: GeneralizedForces): void {

@@ -36,8 +36,11 @@ export const PRESSURE_CROWN = {
   valveDetentK: 1.2e5,
   crownX: 229.0,
   crownY: 91.0,
-  flywheelBaseInertiaKgm2: 1.0e7,
-  flywheelDampingNms: 7.0e4,
+  // The ram only has a finite 2.4 m powered rack stroke. This inertia keeps
+  // its stored work large and dangerous, while still letting that real stroke
+  // spin the governor enough to deploy the bridge.
+  flywheelBaseInertiaKgm2: 5.0e5,
+  flywheelDampingNms: 2.0e4,
   rackEngageM: 16.8,
   rackRatioRadPerM: 1.20,
   rackClutchNms: 3.4e6,
@@ -47,14 +50,14 @@ export const PRESSURE_CROWN = {
   governorMassEachKg: 4200.0,
   governorBaseRadiusM: 3.1,
   governorTravelM: 2.5,
-  governorSpringK: 1.9e5,
+  governorSpringK: 1.35e5,
   governorDampingNsPm: 1.4e4,
   bridgeMassKg: 22000.0,
   bridgeTravelM: 16.0,
-  bridgeThresholdM: 0.32,
-  bridgeGain: 7.2,
-  bridgeLinkK: 4.2e5,
-  bridgeLinkC: 3.8e4,
+  bridgeThresholdM: 0.14,
+  bridgeGain: 12.0,
+  bridgeLinkK: 2.2e5,
+  bridgeLinkC: 2.0e4,
 } as const;
 
 function addDof(chain: LinkedCascadeState, d: MechanicalDofState): void {
@@ -137,6 +140,11 @@ export function applyPressureCrownForces(chain: LinkedCascadeState, forces: Gene
   const flywheel = mechDof(chain.network, MECH_ID.mc10Flywheel);
   const governor = mechDof(chain.network, MECH_ID.mc10Governor);
   const bridge = mechDof(chain.network, MECH_ID.mc10Bridge);
+
+  // Persist the physical topology before force assembly. This matters both for
+  // saved/loading states and for an already-open valve: it must not receive one
+  // unconstrained spring step that erases its real over-center crossing.
+  retainOverCenter(valve, PRESSURE_CROWN.valveOverCenterM, PRESSURE_CROWN.valveClearM);
 
   const valveTarget = clamp(
     (helix.q - PRESSURE_CROWN.valveFollowerStartM) * PRESSURE_CROWN.valveFollowerGain,

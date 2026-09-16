@@ -137,7 +137,15 @@ export function mountGame(canvas: HTMLCanvasElement) {
 
   function bindView(px?: number, pz?: number) {
     const ui = useGame.getState();
-    return applyCoupling(level, sim, px, pz, ui.slingA, ui.look?.id ?? null);
+    return applyCoupling(level, sim, px, pz, ui.slingA, ui.look?.id ?? null, {
+      x: player.x,
+      y: player.y,
+      z: player.z,
+      vx: player.vx,
+      vy: player.vy,
+      vz: player.vz,
+      chute: player.parachuteDeployed,
+    });
   }
 
   function flash(message: string) {

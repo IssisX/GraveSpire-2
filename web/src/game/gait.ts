@@ -58,7 +58,7 @@ export function stepGait(
     landed: number;
     supportLean?: number;
     balance?: number;
-    parkourMode?: "free" | "vault" | "hang" | "pullup";
+    parkourMode?: "free" | "vault" | "hang" | "pullup" | "ladder";
   },
   settings: Settings,
 ) {
@@ -127,6 +127,11 @@ export function stepGait(
       wantFore = -0.012;
       wantRoll += p * 0.006;
       wantYaw *= 0.35;
+    } else if (parkour === "ladder") {
+      wantV = p * 0.008;
+      wantFore = 0.010;
+      wantRoll *= 0.28;
+      wantYaw *= 0.22;
     }
   }
 

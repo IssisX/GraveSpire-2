@@ -9,6 +9,8 @@ import { carrierWorld } from "./level.ts";
 import { applyRubeCoupling } from "./rube-world.ts";
 import { applyLinkedCascadeCoupling } from "./linked-world.ts";
 import { applySpringShuttleCoupling } from "./spring-shuttle-world.ts";
+import type { SkyWitness } from "./sky-world.ts";
+import { applyRecoveryWorld } from "./recovery-world.ts";
 import { getSettings } from "./settings.ts";
 
 function lamp(mesh: THREE.Mesh, on: boolean, hot = false) {
@@ -38,6 +40,7 @@ export function applyCoupling(
   pz?: number,
   slingA?: string | null,
   lookId?: string | null,
+  witness?: SkyWitness,
 ): { x: number; y: number; z: number } {
   const s = sim.state();
   const defl = s.frame.deflection_m;
@@ -265,7 +268,8 @@ export function applyCoupling(
 
   applyRubeCoupling(level, sim);
   applyLinkedCascadeCoupling(level, sim);
-  applySpringShuttleCoupling(level, sim);
+  applySpringShuttleCoupling(level, sim, witness);
+  applyRecoveryWorld(level, sim);
   return pos;
 }
 

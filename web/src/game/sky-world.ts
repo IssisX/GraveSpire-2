@@ -18,7 +18,20 @@ type SkyBindings = {
   bridgeDeck: THREE.Mesh;
   skyCarCol: Collider;
   bridgeCol: Collider;
+  pendulumCols: Collider[];
+  pendulumBobCol: Collider;
   vultures: THREE.Group[];
+};
+
+/** Presentation witness only. It cannot alter player or simulation state. */
+export type SkyWitness = {
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  chute: boolean;
 };
 
 const cache = new WeakMap<Level, SkyBindings>();
@@ -63,6 +76,87 @@ function makeVulture(level: Level): THREE.Group {
   body.rotation.z = Math.PI / 2;
   g.add(body);
   return g;
+}
+
+function updatePendulumColliders(b: SkyBindings, angle: number, omega: number) {
+  const segmentLength = SKY.pendulumLengthM / b.pendulumCols.length;
+  const sx = Math.sin(angle);
+  const cy = Math.cos(angle);
+  for (let i = 0; i < b.pendulumCols.length; i++) {
+    const c = b.pendulumCols[i]!;
+    const along = (i + 0.5) * segmentLength;
+    const x = SKY.pendulumPivotX + sx * along;
+    const y = SKY.pendulumPivotY - cy * along;
+    const hx = Math.abs(sx) * segmentLength * 0.5 + 0.54;
+    const hy = Math.abs(cy) * segmentLength * 0.5 + 0.54;
+    c.minx = x - hx;
+    c.maxx = x + hx;
+    c.miny = y - hy;
+    c.maxy = y + hy;
+    c.minz = SKY.z - 0.54;
+    c.maxz = SKY.z + 0.54;
+    c.surfaceVx = 0;
+    c.surfaceVy = 0;
+    c.surfaceVz = 0;
+    c.surfaceAngularZ = omega;
+    c.surfacePivotX = SKY.pendulumPivotX;
+    c.surfacePivotY = SKY.pendulumPivotY;
+  }
+
+  const along = SKY.pendulumLengthM;
+  const x = SKY.pendulumPivotX + sx * along;
+  const y = SKY.pendulumPivotY - cy * along;
+  const hx = Math.abs(cy) * 2.4 + Math.abs(sx) * 2.0;
+  const hy = Math.abs(sx) * 2.4 + Math.abs(cy) * 2.0;
+  const bob = b.pendulumBobCol;
+  bob.minx = x - hx;
+  bob.maxx = x + hx;
+  bob.miny = y - hy;
+  bob.maxy = y + hy;
+  bob.minz = SKY.z - 2.2;
+  bob.maxz = SKY.z + 2.2;
+  bob.surfaceVx = 0;
+  bob.surfaceVy = 0;
+  bob.surfaceVz = 0;
+  bob.surfaceAngularZ = omega;
+  bob.surfacePivotX = SKY.pendulumPivotX;
+  bob.surfacePivotY = SKY.pendulumPivotY;
+}
+
+function updateVultures(b: SkyBindings, w11: ReturnType<typeof mc11World>, w12: ReturnType<typeof mc12World>, witness?: SkyWitness) {
+  const machineDisturbance = Math.min(
+    1,
+    Math.abs(w12.pendulum.omega) * 0.9 + Math.abs(w12.bridge.vx) * 0.18 + Math.abs(w11.sail.omega) * 0.35,
+  );
+  let playerDisturbance = 0;
+  let fleeX = 0;
+  let fleeZ = 0;
+  if (witness) {
+    const dx = witness.x - 285;
+    const dz = witness.z - (SKY.z - 12);
+    const dist = Math.hypot(dx, witness.y - 142, dz);
+    const proximity = Math.max(0, Math.min(1, 1 - dist / 74));
+    const falling = Math.max(0, Math.min(1, -witness.vy / 18));
+    const trajectory = Math.max(0, Math.min(1, Math.hypot(witness.vx, witness.vz) / 9));
+    playerDisturbance = proximity * (0.20 + falling * 0.62 + trajectory * 0.22 + (witness.chute ? 0.18 : 0));
+    const planar = Math.hypot(dx, dz) || 1;
+    fleeX = -dx / planar * playerDisturbance * 13;
+    fleeZ = -dz / planar * playerDisturbance * 13;
+  }
+  const disturbance = Math.min(1, machineDisturbance + playerDisturbance);
+  const t = performance.now() * 0.00016;
+  for (let i = 0; i < b.vultures.length; i++) {
+    const a = t * (0.72 + i * 0.08 + disturbance * 0.22) + i * 2.2;
+    const radius = 18 + i * 7 + disturbance * 10;
+    const bird = b.vultures[i]!;
+    bird.position.set(
+      285 + fleeX + Math.cos(a) * radius,
+      142 + i * 6 + disturbance * 8 + Math.sin(a * 1.7) * (2.2 + disturbance * 2.5),
+      SKY.z - 12 + fleeZ + Math.sin(a) * radius * 0.35,
+    );
+    bird.rotation.y = -a + Math.PI / 2;
+    bird.rotation.z = Math.sin(a * (2.1 + disturbance)) * (0.12 + disturbance * 0.18);
+  }
 }
 
 function ensureWorld(level: Level): SkyBindings {
@@ -128,6 +222,14 @@ function ensureWorld(level: Level): SkyBindings {
   bob.position.y = -SKY.pendulumLengthM;
   pendulum.add(arm, bob);
   root.add(pendulum);
+  const pendulumCols: Collider[] = [];
+  for (let i = 0; i < 6; i++) {
+    const c: Collider = { id: `mc12_pendulum_arm_${i}`, minx: 0, maxx: 0, miny: 0, maxy: 0, minz: 0, maxz: 0 };
+    level.colliders.push(c);
+    pendulumCols.push(c);
+  }
+  const pendulumBobCol: Collider = { id: "mc12_pendulum_bob", minx: 0, maxx: 0, miny: 0, maxy: 0, minz: 0, maxz: 0 };
+  level.colliders.push(pendulumBobCol);
 
   const pendulumBallast = new THREE.Group();
   pendulumBallast.add(new THREE.Mesh(geo(level, new THREE.BoxGeometry(2.6, 2.2, 2.4)), mats.carrier));
@@ -162,13 +264,13 @@ function ensureWorld(level: Level): SkyBindings {
     vultures.push(bird);
   }
 
-  const made = { root, sail, skyCar, counterweight, pendulum, pendulumBallast, bridge, bridgeDeck, skyCarCol, bridgeCol, vultures };
+  const made = { root, sail, skyCar, counterweight, pendulum, pendulumBallast, bridge, bridgeDeck, skyCarCol, bridgeCol, pendulumCols, pendulumBobCol, vultures };
   cache.set(level, made);
   return made;
 }
 
 /** Presentation-only projection from the shared mechanical authority. */
-export function applySkyWorldCoupling(level: Level, sim: Simulation): void {
+export function applySkyWorldCoupling(level: Level, sim: Simulation, witness?: SkyWitness): void {
   const b = ensureWorld(level);
   const rube = sim.state().rube;
   if (!rube?.chain) return;
@@ -185,12 +287,15 @@ export function applySkyWorldCoupling(level: Level, sim: Simulation): void {
   b.skyCarCol.maxy = w11.car.y + 0.04;
   b.skyCarCol.minz = w11.car.z - 2.5;
   b.skyCarCol.maxz = w11.car.z + 2.5;
+  b.skyCarCol.surfaceVx = 0;
   b.skyCarCol.surfaceVy = w11.car.vy;
+  b.skyCarCol.surfaceVz = 0;
 
   b.pendulum.rotation.z = w12.pendulum.angle;
   const bx = SKY.pendulumPivotX + w12.ballastRadius * Math.sin(w12.pendulum.angle);
   const by = SKY.pendulumPivotY - w12.ballastRadius * Math.cos(w12.pendulum.angle);
   b.pendulumBallast.position.set(bx, by, SKY.z);
+  updatePendulumColliders(b, w12.pendulum.angle, w12.pendulum.omega);
 
   const q = Math.max(0.25, w12.bridge.q);
   b.bridgeDeck.scale.x = q;
@@ -202,30 +307,17 @@ export function applySkyWorldCoupling(level: Level, sim: Simulation): void {
   b.bridgeCol.minz = SKY.z - 2.2;
   b.bridgeCol.maxz = SKY.z + 2.2;
   b.bridgeCol.surfaceVx = w12.bridge.vx;
+  b.bridgeCol.surfaceVy = 0;
+  b.bridgeCol.surfaceVz = 0;
 
   const carIt = level.interactables.find((x) => x.id === "mc11_sky_car");
   if (carIt) carIt.y = w11.car.y;
   const bridgeIt = level.interactables.find((x) => x.id === "mc12_bridge");
   if (bridgeIt) bridgeIt.x = SKY.bridgeX + 0.5 * w12.bridge.q;
 
-  // The birds react to real nearby machinery instead of following a scripted scare trigger.
-  const disturbance = Math.min(
-    1,
-    Math.abs(w12.pendulum.omega) * 0.9 + Math.abs(w12.bridge.vx) * 0.18 + Math.abs(w11.sail.omega) * 0.35,
-  );
-  const t = performance.now() * 0.00016;
-  for (let i = 0; i < b.vultures.length; i++) {
-    const a = t * (0.72 + i * 0.08 + disturbance * 0.22) + i * 2.2;
-    const radius = 18 + i * 7 + disturbance * 10;
-    const bird = b.vultures[i]!;
-    bird.position.set(
-      285 + Math.cos(a) * radius,
-      142 + i * 6 + disturbance * 8 + Math.sin(a * 1.7) * (2.2 + disturbance * 2.5),
-      SKY.z - 12 + Math.sin(a) * radius * 0.35,
-    );
-    bird.rotation.y = -a + Math.PI / 2;
-    bird.rotation.z = Math.sin(a * (2.1 + disturbance)) * (0.12 + disturbance * 0.18);
-  }
+  // Birds read visible player trajectory and authoritative machine motion;
+  // their response has no gameplay consequence or detection path.
+  updateVultures(b, w11, w12, witness);
 
   applyCompositionWorld(level, sim);
 }

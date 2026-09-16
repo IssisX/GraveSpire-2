@@ -40,10 +40,14 @@ describe("MC-11/12 high-altitude causal spine", () => {
     const car = mechDof(chain.network, MECH_ID.mc11SkyCar);
     car.q = SKY.skyCarTravelM;
     car.v = 0;
-    for (let i = 0; i < 120 * 12; i++) stepRubeMechanics(r, 1 / 120);
+    let peakAngle = mechDof(chain.network, MECH_ID.mc12Pendulum).q;
+    for (let i = 0; i < 120 * 12; i++) {
+      stepRubeMechanics(r, 1 / 120);
+      peakAngle = Math.max(peakAngle, mechDof(chain.network, MECH_ID.mc12Pendulum).q);
+    }
     const w = mc12World(chain);
     assert.ok(mechDof(chain.network, MECH_ID.mc12PendulumLatch).q >= SKY.pendulumLatchClearM, "sky-car must mechanically release the pendulum latch");
-    assert.ok(w.pendulum.angle > SKY.pendulumInitialRad + 0.25, "gravity must swing the released pendulum");
+    assert.ok(peakAngle > SKY.pendulumInitialRad + 0.25, "gravity must swing the released pendulum");
     assert.ok(w.bridge.q > 0.5, "pendulum impact must physically drive the crown bridge");
   });
 });

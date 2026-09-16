@@ -18,6 +18,8 @@ export class GameAudio {
   footT = 0;
   muted = false;
   private altitudeHooked = false;
+  private contactHooked = false;
+  private lastCreakAt = 0;
   private onAltitude = (ev: Event) => {
     const detail = (ev as CustomEvent<{ height?: number; verticalSpeed?: number; chute?: boolean }>).detail ?? {};
     const h = detail.height ?? 0;
@@ -25,6 +27,10 @@ export class GameAudio {
     const exposure = Math.max(0, Math.min(1, (h - 72) / 75));
     const fallRush = Math.max(0, Math.min(1, (vy - 4) / 22));
     this.setWind(Math.max(exposure, fallRush * 0.8), Boolean(detail.chute));
+  };
+  private onContact = (ev: Event) => {
+    const detail = (ev as CustomEvent<{ impact?: number; drop?: number }>).detail ?? {};
+    this.impact(Math.max(detail.impact ?? 0, (detail.drop ?? 0) * 0.42));
   };
 
   unlock = () => {
@@ -45,6 +51,10 @@ export class GameAudio {
     if (!this.altitudeHooked) {
       window.addEventListener("gravespire-altitude", this.onAltitude as EventListener);
       this.altitudeHooked = true;
+    }
+    if (!this.contactHooked) {
+      window.addEventListener("gravespire-contact", this.onContact as EventListener);
+      this.contactHooked = true;
     }
     if (this.ctx.state === "suspended") void this.ctx.resume();
   };
@@ -184,6 +194,25 @@ export class GameAudio {
     this.cableGain.gain.setTargetAtTime(audible, t, 0.28);
   }
 
+  /** Steel impacts are emitted only by real capsule contacts. */
+  impact(amount: number) {
+    if (!this.ctx || amount < 1.1) return;
+    const k = Math.max(0, Math.min(1, (amount - 1.1) / 12));
+    this.beep(92 + (1 - k) * 56, 0.045 + k * 0.06, 0.035 + k * 0.10);
+    if (k > 0.34) this.beep(48 + k * 26, 0.09, 0.035 + k * 0.055);
+  }
+
+  /** Low structure creaks read load and motion from the shared state. */
+  structureCreak(load: number, motion: number) {
+    if (!this.ctx || load < 0.42 || motion < 0.08) return;
+    const now = this.ctx.currentTime;
+    const spacing = 1.55 - Math.min(1, load) * 0.78 - Math.min(1, motion) * 0.34;
+    if (now - this.lastCreakAt < Math.max(0.28, spacing)) return;
+    this.lastCreakAt = now;
+    const k = Math.max(0, Math.min(1, load * 0.7 + motion * 0.3));
+    this.beep(52 + k * 24, 0.18, 0.018 + k * 0.035);
+  }
+
   beep(freq: number, dur = 0.08, vol = 0.08) {
     if (!this.ctx || !this.sfx) return;
     const o = this.ctx.createOscillator();
@@ -232,7 +261,9 @@ export class GameAudio {
   }
   dispose() {
     if (this.altitudeHooked) window.removeEventListener("gravespire-altitude", this.onAltitude as EventListener);
+    if (this.contactHooked) window.removeEventListener("gravespire-contact", this.onContact as EventListener);
     this.altitudeHooked = false;
+    this.contactHooked = false;
     void this.ctx?.close();
     this.ctx = null;
   }

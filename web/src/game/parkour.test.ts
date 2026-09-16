@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Collider } from "./collision.ts";
-import { canShimmy, probeControlledDrop, probeLedgeCatch, probeVault } from "./parkour.ts";
+import { canShimmy, probeControlledDrop, probeLadderGrab, probeLedgeCatch, probeVault } from "./parkour.ts";
 
 const box = (id: string, minx: number, maxx: number, miny: number, maxy: number, minz: number, maxz: number): Collider => ({
   id, minx, maxx, miny, maxy, minz, maxz,
@@ -29,6 +29,17 @@ describe("geometry-driven parkour", () => {
     assert.ok(p);
     assert.equal(p?.colliderId, "moving_beam");
     assert.equal(canShimmy(p!, 1, 0.45, c), true);
+  });
+
+  it("grabs only an approach-facing physical ladder", () => {
+    const ladder: Collider = {
+      ...box("service_ladder", 1.0, 1.2, 0, 5.5, -0.45, 0.45),
+      climbable: { normalX: -1, normalZ: 0 },
+    };
+    const p = probeLadderGrab({ x: 0.56, y: 1.2, z: 0, fx: 1, fz: 0, radius: 0.32, colliders: [ladder] });
+    assert.equal(p?.kind, "ladder");
+    assert.equal(p?.colliderId, "service_ladder");
+    assert.equal(probeLadderGrab({ x: 0.56, y: 1.2, z: 0, fx: -1, fz: 0, radius: 0.32, colliders: [ladder] }), null);
   });
 
   it("derives controlled drop from the current support edge", () => {

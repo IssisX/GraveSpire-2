@@ -16,6 +16,7 @@ export function tickSoundscape(audio: GameAudio, state: WorldState, operating: b
   const structuralLoad = Math.min(1, frameStrain + cableLoad * 0.30);
   audio.setStrain(structuralLoad);
   audio.setCableSing(cableLoad, Math.min(1, chainMotion / 2.5));
+  audio.structureCreak(structuralLoad, Math.min(1, chainMotion / 2.2));
 
   const venting = state.gate.pressure_pa < 180000 || state.gate.inventory_kg < 250;
   audio.setSteam(venting ? Math.min(1, 0.25 + (420000 - state.gate.pressure_pa) / 420000) : 0);

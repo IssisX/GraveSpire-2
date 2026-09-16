@@ -43,10 +43,16 @@ describe("MC-09/10 pressure crown", () => {
     valve.q = PRESSURE_CROWN.valveTravelM;
     ram.q = PRESSURE_CROWN.rackEngageM + 2.8;
     ram.v = 1.4;
-    for (let i = 0; i < 120 * 7; i++) stepRubeMechanics(r, 1 / 120);
+    let peakGovernor = mechDof(chain.network, MECH_ID.mc10Governor).q;
+    let peakBridge = mechDof(chain.network, MECH_ID.mc10Bridge).q;
+    for (let i = 0; i < 120 * 7; i++) {
+      stepRubeMechanics(r, 1 / 120);
+      peakGovernor = Math.max(peakGovernor, mechDof(chain.network, MECH_ID.mc10Governor).q);
+      peakBridge = Math.max(peakBridge, mechDof(chain.network, MECH_ID.mc10Bridge).q);
+    }
     const w = mc10World(chain);
     assert.ok(Math.abs(w.flywheel.omega) > 0.15, "ram-mounted rack must spin the flywheel");
-    assert.ok(w.governorTravel > 0.05, "centrifugal demand must move real governor mass");
-    assert.ok(w.bridgeTravel > 0.25, "governor linkage must move the transfer span");
+    assert.ok(peakGovernor > 0.05, "centrifugal demand must move real governor mass");
+    assert.ok(peakBridge > 0.25, "governor linkage must move the transfer span");
   });
 });

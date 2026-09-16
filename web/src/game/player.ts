@@ -1,9 +1,10 @@
-import { highAltitudeWindMps } from "@/sim/sky-spine.ts";
+import { highAltitudeWindMps } from "../sim/sky-spine.ts";
 import type { Actions } from "./input.ts";
 import { moveCapsule, type Collider } from "./collision.ts";
 import {
   canShimmy,
   probeControlledDrop,
+  probeLadderGrab,
   probeLedgeCatch,
   probeVault,
   type ParkourProbe,
@@ -23,6 +24,8 @@ const CAP_H_CROUCH = 1.05;
 const CHUTE_DESCENT = -6.1;
 const CHUTE_GLIDE = 6.4;
 const PLAYER_MASS_KG = 86;
+const LADDER_SPEED = 2.75;
+const PRECISION_MOMENTUM_S = 0.26;
 
 const FALL_BARKS = [
   "OH SHIT—THAT IS A LOT OF BUILDING!",
@@ -42,7 +45,7 @@ const RECOVERY_BARKS = [
   "That counts as a shortcut and I refuse further questions.",
 ] as const;
 
-type TraverseMode = "free" | "vault" | "hang" | "pullup";
+type TraverseMode = "free" | "vault" | "hang" | "pullup" | "ladder";
 type Vec3 = { x: number; y: number; z: number };
 type ContactImpulse = (colliderId: string, impulseXNs: number, impulseZNs: number) => void;
 
@@ -113,6 +116,10 @@ export class Player {
   private traverseDuration = 0;
   private traverseFrom: Vec3 = { x: 0, y: 0, z: 0 };
   private traverseTo: Vec3 = { x: 0, y: 0, z: 0 };
+  private traverseExitVelocity: Vec3 = { x: 0, y: 0, z: 0 };
+  private precisionMomentumT = 0;
+  private precisionSpeed = 0;
+  private balanceSlip: Vec3 = { x: 0, y: 0, z: 0 };
   private barkClock = 0;
   private barkIndex = 0;
   private recoveryIndex = 0;
@@ -185,6 +192,12 @@ export class Player {
     } catch { /* presentation hook only */ }
   }
 
+  private emitContact(impact: number, drop: number, colliderId: string) {
+    try {
+      window.dispatchEvent(new CustomEvent("gravespire-contact", { detail: { impact, drop, colliderId } }));
+    } catch { /* presentation hook only */ }
+  }
+
   private beginTraverse(mode: "vault" | "pullup", to: Vec3, duration: number, probe: ParkourProbe) {
     this.parkourMode = mode;
     this.parkourProbe = probe;
@@ -192,6 +205,10 @@ export class Player {
     this.traverseDuration = duration;
     this.traverseFrom = { x: this.x, y: this.y, z: this.z };
     this.traverseTo = { ...to };
+    // Traversal animation owns the body for a few frames, but not the real
+    // approach momentum. The exit feeds it back into the support velocity.
+    const retain = mode === "vault" ? 0.82 : 0.34;
+    this.traverseExitVelocity = { x: this.vx * retain, y: this.vy * 0.22, z: this.vz * retain };
     this.vx = 0;
     this.vy = 0;
     this.vz = 0;
@@ -200,6 +217,19 @@ export class Player {
 
   private beginHang(probe: ParkourProbe) {
     this.parkourMode = "hang";
+    this.parkourProbe = probe;
+    this.x = probe.targetX;
+    this.y = probe.targetY;
+    this.z = probe.targetZ;
+    this.vx = 0;
+    this.vy = 0;
+    this.vz = 0;
+    this.grounded = false;
+    this.groundedId = null;
+  }
+
+  private beginLadder(probe: ParkourProbe) {
+    this.parkourMode = "ladder";
     this.parkourProbe = probe;
     this.x = probe.targetX;
     this.y = probe.targetY;
@@ -238,12 +268,15 @@ export class Player {
     this.y = this.traverseFrom.y + (this.traverseTo.y - this.traverseFrom.y) * ease + arc;
     this.z = this.traverseFrom.z + (this.traverseTo.z - this.traverseFrom.z) * ease;
     if (t >= 1) {
+      const finishedMode = this.parkourMode;
       this.parkourMode = "free";
       this.parkourProbe = null;
       this.grounded = true;
-      this.vx = sv.x;
-      this.vy = Math.max(0, sv.y);
-      this.vz = sv.z;
+      this.vx = sv.x + this.traverseExitVelocity.x;
+      this.vy = Math.max(0, sv.y + this.traverseExitVelocity.y);
+      this.vz = sv.z + this.traverseExitVelocity.z;
+      this.precisionMomentumT = finishedMode === "vault" ? 0.16 : 0;
+      this.precisionSpeed = Math.hypot(this.vx, this.vz);
     }
     this.emitAtmosphere();
     return true;
@@ -305,6 +338,50 @@ export class Player {
     return true;
   }
 
+  private stepLadder(dt: number, actions: Actions, colliders: Collider[]): boolean {
+    if (this.parkourMode !== "ladder" || !this.parkourProbe) return false;
+    const p = this.parkourProbe;
+    const ladder = colliders.find((c) => c.id === p.colliderId && !c.disabled && c.climbable);
+    if (!ladder) {
+      this.parkourMode = "free";
+      this.parkourProbe = null;
+      this.vy = -0.8;
+      return false;
+    }
+    const face = ladder.climbable!;
+    const climb = clamp(actions.moveY, -1, 1);
+    this.x = clamp(this.x, ladder.minx, ladder.maxx) + face.normalX * (CAP_R + 0.07);
+    this.z = clamp(this.z, ladder.minz, ladder.maxz) + face.normalZ * (CAP_R + 0.07);
+    this.y = clamp(this.y + climb * LADDER_SPEED * dt, ladder.miny, ladder.maxy - 0.03);
+
+    if (actions.crouch || actions.moveY < -0.72) {
+      this.parkourMode = "free";
+      this.parkourProbe = null;
+      this.vx = face.normalX * 0.45;
+      this.vy = -0.85;
+      this.vz = face.normalZ * 0.45;
+      this.airTime = Math.max(this.airTime, 0.2);
+      return false;
+    }
+    if ((actions.jumpPressed || climb > 0.72) && this.y >= ladder.maxy - 0.10) {
+      this.parkourMode = "free";
+      this.parkourProbe = null;
+      // Exit through the real top edge; collision decides whether steel is
+      // there to receive the player. No top-of-ladder teleport occurs.
+      this.x += face.normalX * 0.22;
+      this.z += face.normalZ * 0.22;
+      this.vx = face.normalX * 1.3;
+      this.vy = 0.55;
+      this.vz = face.normalZ * 1.3;
+      return false;
+    }
+    this.vx = 0;
+    this.vy = 0;
+    this.vz = 0;
+    this.emitAtmosphere();
+    return true;
+  }
+
   private currentSupport(colliders: Collider[]): { col?: Collider; velocity: Vec3 } {
     const col = this.groundedId ? colliders.find((c) => c.id === this.groundedId && !c.disabled) : undefined;
     return { col, velocity: surfaceVelocity(col, this.x, this.y) };
@@ -319,6 +396,7 @@ export class Player {
     if (!support || !this.grounded) {
       this.balance += (0 - this.balance) * Math.min(1, dt * 9);
       this.supportLean += (0 - this.supportLean) * Math.min(1, dt * 8);
+      this.balanceSlip = { x: 0, y: 0, z: 0 };
       return;
     }
     const w = support.maxx - support.minx;
@@ -331,13 +409,23 @@ export class Player {
       Math.abs(support.maxz - this.z),
     );
     const edgeStress = clamp((0.48 - edge) / 0.48, 0, 1);
-    const accelStress = clamp(this.supportAccel / 8.5, 0, 1);
-    const target = clamp(narrow * 0.68 + edgeStress * 0.42 + accelStress * 0.35, 0, 1);
+    const accelStress = clamp(this.supportAccel / 5.4, 0, 1);
+    const target = clamp(narrow * 0.74 + edgeStress * 0.48 + accelStress * 0.58, 0, 1);
     this.balance += (target - this.balance) * Math.min(1, dt * 8);
     const r = this.right();
     const lateralSupportAccel = sax * r.x + saz * r.z;
-    const targetLean = clamp(-lateralSupportAccel * 0.015, -0.16, 0.16) * (0.3 + 0.7 * this.balance);
+    const targetLean = clamp(-lateralSupportAccel * 0.022, -0.22, 0.22) * (0.3 + 0.7 * this.balance);
     this.supportLean += (targetLean - this.supportLean) * Math.min(1, dt * 10);
+    // Deterministic slip comes from measured platform acceleration and the
+    // player's actual footing. It matters on narrow fast carriers but has no
+    // random branch and cannot push through a collider.
+    const outward = edge < 0.34 ? clamp((0.34 - edge) / 0.34, 0, 1) : 0;
+    const slip = narrow * accelStress * (0.20 + outward * 0.42);
+    this.balanceSlip = {
+      x: -r.x * lateralSupportAccel * slip * 0.09,
+      y: 0,
+      z: -r.z * lateralSupportAccel * slip * 0.09,
+    };
   }
 
   private applyWind(dt: number, airborne: boolean) {
@@ -373,6 +461,7 @@ export class Player {
 
     if (this.stepTraverse(dt, colliders)) return;
     if (this.stepHang(dt, actions, colliders)) return;
+    if (this.stepLadder(dt, actions, colliders)) return;
 
     this.crouch = actions.crouch;
     const wantH = this.crouch ? CAP_H_CROUCH : CAP_H;
@@ -411,6 +500,7 @@ export class Player {
       }
     }
 
+    this.precisionMomentumT = Math.max(0, this.precisionMomentumT - dt);
     let maxSp = this.crouch ? CROUCH : this.sprinting ? SPRINT : this.parachuteDeployed ? CHUTE_GLIDE : WALK;
     maxSp *= 1 - this.balance * 0.12;
     const strafeScale = this.sprinting ? 0.70 : 0.92;
@@ -420,8 +510,15 @@ export class Player {
     const nx = wishLen > 0 ? wishX / wishLen : 0;
     const nz = wishLen > 0 ? wishZ / wishLen : 0;
     maxSp *= inputMag;
-    const targetVx = nx * maxSp;
-    const targetVz = nz * maxSp;
+    let targetVx = nx * maxSp;
+    let targetVz = nz * maxSp;
+    if (!this.grounded && !this.parachuteDeployed && this.precisionMomentumT > 0) {
+      const carried = Math.max(3.4, this.precisionSpeed * 0.88);
+      const carryX = inputMag > 0.12 ? nx : this.vx / Math.max(0.01, Math.hypot(this.vx, this.vz));
+      const carryZ = inputMag > 0.12 ? nz : this.vz / Math.max(0.01, Math.hypot(this.vx, this.vz));
+      targetVx = carryX * carried;
+      targetVz = carryZ * carried;
+    }
 
     const pvX = this.vx;
     const pvZ = this.vz;
@@ -438,6 +535,10 @@ export class Player {
     const moved = moveToward2D(this.vx, this.vz, targetVx, targetVz, accel * dt);
     this.vx = moved.x;
     this.vz = moved.z;
+    if (this.grounded) {
+      this.vx += this.balanceSlip.x * dt;
+      this.vz += this.balanceSlip.z * dt;
+    }
     this.ax = (this.vx - pvX) / Math.max(dt, 1e-4);
     this.az = (this.vz - pvZ) / Math.max(dt, 1e-4);
     this.forwardAccel = this.ax * f.x + this.az * f.z;
@@ -475,10 +576,21 @@ export class Player {
       }
     }
 
+    if (actions.jumpPressed && !this.parachuteDeployed) {
+      const ladder = probeLadderGrab({
+        x: this.x, y: this.y, z: this.z, fx: f.x, fz: f.z, radius: CAP_R, colliders,
+      });
+      if (ladder && (!this.grounded || this.speed < 2.2)) {
+        this.beginLadder(ladder);
+        this.emitAtmosphere();
+        return;
+      }
+    }
     if (actions.jumpPressed && !this.grounded) this.deployParachute();
     if (this.jumpBuffered > 0) this.jumpBuffered -= dt;
     const wantJump = actions.jumpPressed || this.jumpBuffered > 0;
     if (wantJump && this.coyote > 0) {
+      const runSpeed = Math.hypot(this.vx, this.vz);
       this.vx += supportNow.velocity.x;
       this.vy = JUMP_V + Math.max(-0.5, supportNow.velocity.y);
       this.vz += supportNow.velocity.z;
@@ -486,6 +598,8 @@ export class Player {
       this.groundedId = null;
       this.coyote = 0;
       this.jumpBuffered = 0;
+      this.precisionMomentumT = this.sprinting && runSpeed > 4.15 ? PRECISION_MOMENTUM_S : 0;
+      this.precisionSpeed = runSpeed;
     } else if (wantJump && !this.grounded && !this.parachuteDeployed && this.tryMantle(colliders)) {
       this.jumpBuffered = 0;
       return;
@@ -501,6 +615,9 @@ export class Player {
     const steps = Math.max(1, Math.ceil((Math.hypot(this.vx + supportV.x, this.vy + supportV.y, this.vz + supportV.z) * dt) / 0.18));
     const sdt = dt / steps;
     const pushed = new Set<string>();
+    let strongestSideImpact = 0;
+    let strongestSideId = "";
+    const preCollisionVertical = this.vy;
     for (let i = 0; i < steps; i++) {
       const res = moveCapsule(
         { x: this.x, y: this.y, z: this.z, r: CAP_R, h: wantH },
@@ -520,6 +637,13 @@ export class Player {
           );
         }
       }
+      if (res.sideHits.length) {
+        const impact = Math.hypot(this.vx + supportV.x, this.vz + supportV.z);
+        if (impact > strongestSideImpact) {
+          strongestSideImpact = impact;
+          strongestSideId = res.sideHits[0]!;
+        }
+      }
       this.x = res.x;
       this.y = res.y;
       this.z = res.z;
@@ -532,9 +656,11 @@ export class Player {
     if (!wasGround && this.grounded) {
       const drop = this.fallFrom - this.y;
       this.landed = clamp((drop - 0.35) / 4.2, 0, 1);
+      this.emitContact(Math.max(0, -preCollisionVertical), drop, this.groundedId ?? "steel");
       if (this.chuteUsedThisFall) this.recoveryBark(drop);
       this.parachuteDeployed = false;
     }
+    if (strongestSideImpact > 2.4) this.emitContact(strongestSideImpact, 0, strongestSideId);
     this.speed = Math.hypot(this.vx, this.vz);
     this.emitAtmosphere();
   }

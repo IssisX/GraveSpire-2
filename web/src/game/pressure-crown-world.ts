@@ -5,7 +5,7 @@ import { mc09World, mc10World, PRESSURE_CROWN } from "@/sim/pressure-crown.ts";
 import type { Collider } from "./collision.ts";
 import type { Interactable, Level } from "./level.ts";
 import { makeSignTexture } from "./materials.ts";
-import { applySkyWorldCoupling } from "./sky-world.ts";
+import { applySkyWorldCoupling, type SkyWitness } from "./sky-world.ts";
 
 type PressureBindings = {
   root: THREE.Group;
@@ -152,7 +152,7 @@ function ensureWorld(level: Level): PressureBindings {
   return made;
 }
 
-export function applyPressureCrownCoupling(level: Level, sim: Simulation): void {
+export function applyPressureCrownCoupling(level: Level, sim: Simulation, witness?: SkyWitness): void {
   const b = ensureWorld(level);
   const rube = sim.state().rube;
   if (!rube?.chain) return;
@@ -193,5 +193,5 @@ export function applyPressureCrownCoupling(level: Level, sim: Simulation): void 
   const bridgeIt = level.interactables.find((x) => x.id === "mc10_bridge");
   if (bridgeIt) bridgeIt.x = PRESSURE_CROWN.crownX - 0.5 * w10.bridgeTravel;
 
-  applySkyWorldCoupling(level, sim);
+  applySkyWorldCoupling(level, sim, witness);
 }

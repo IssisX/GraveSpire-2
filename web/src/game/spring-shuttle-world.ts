@@ -9,6 +9,7 @@ import { makeSignTexture } from "./materials.ts";
 import { applyUpperCascadeCoupling } from "./upper-world.ts";
 import { applyVerticalSpineCoupling } from "./vertical-world.ts";
 import { applyPressureCrownCoupling } from "./pressure-crown-world.ts";
+import type { SkyWitness } from "./sky-world.ts";
 
 type ShuttleBindings = {
   root: THREE.Group;
@@ -137,7 +138,7 @@ function ensureWorld(level: Level): ShuttleBindings {
 }
 
 /** Presentation and moving-support projection only; authoritative motion lives in sim. */
-export function applySpringShuttleCoupling(level: Level, sim: Simulation): void {
+export function applySpringShuttleCoupling(level: Level, sim: Simulation, witness?: SkyWitness): void {
   const b = ensureWorld(level);
   const rube = sim.state().rube;
   if (!rube) return;
@@ -165,5 +166,5 @@ export function applySpringShuttleCoupling(level: Level, sim: Simulation): void 
 
   applyUpperCascadeCoupling(level, sim);
   applyVerticalSpineCoupling(level, sim);
-  applyPressureCrownCoupling(level, sim);
+  applyPressureCrownCoupling(level, sim, witness);
 }

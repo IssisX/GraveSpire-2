@@ -1,7 +1,7 @@
 import type { Collider } from "./collision.ts";
 
 export type ParkourProbe = {
-  kind: "step" | "vault" | "ledge" | "drop";
+  kind: "step" | "vault" | "ledge" | "drop" | "ladder";
   colliderId: string;
   targetX: number;
   targetY: number;
@@ -17,6 +17,10 @@ function active(colliders: Collider[]): Collider[] {
 
 function pointInXZ(c: Collider, x: number, z: number, pad = 0): boolean {
   return x >= c.minx - pad && x <= c.maxx + pad && z >= c.minz - pad && z <= c.maxz + pad;
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }
 
 function capsuleClear(
@@ -138,6 +142,51 @@ export function probeLedgeCatch(args: {
   };
 }
 
+/**
+ * Finds a hand-reachable physical ladder face. A ladder must be approached
+ * from its declared side and the probe is derived from the player capsule,
+ * so there is no invisible climb field beside the steel.
+ */
+export function probeLadderGrab(args: {
+  x: number;
+  y: number;
+  z: number;
+  fx: number;
+  fz: number;
+  radius: number;
+  colliders: Collider[];
+}): ParkourProbe | null {
+  let best: { c: Collider; distance: number } | null = null;
+  for (const c of active(args.colliders)) {
+    const face = c.climbable;
+    if (!face) continue;
+    const approach = args.fx * face.normalX + args.fz * face.normalZ;
+    if (approach > -0.18) continue;
+    if (args.y + 1.42 < c.miny + 0.12 || args.y > c.maxy - 0.08) continue;
+    const cx = clamp(args.x, c.minx, c.maxx);
+    const cz = clamp(args.z, c.minz, c.maxz);
+    const distance = Math.hypot(args.x - cx, args.z - cz);
+    if (distance > args.radius + 0.48) continue;
+    if (!best || distance < best.distance) best = { c, distance };
+  }
+  if (!best) return null;
+  const c = best.c;
+  const face = c.climbable!;
+  const targetY = clamp(args.y, c.miny + 0.02, c.maxy - 0.08);
+  const centerX = clamp(args.x, c.minx, c.maxx);
+  const centerZ = clamp(args.z, c.minz, c.maxz);
+  return {
+    kind: "ladder",
+    colliderId: c.id,
+    targetX: centerX + face.normalX * (args.radius + 0.07),
+    targetY,
+    targetZ: centerZ + face.normalZ * (args.radius + 0.07),
+    topY: c.maxy,
+    tangentX: -face.normalZ,
+    tangentZ: face.normalX,
+  };
+}
+
 function rayExitDistance(c: Collider, x: number, z: number, fx: number, fz: number): number {
   const candidates: number[] = [];
   if (fx > 1e-5) candidates.push((c.maxx - x) / fx);
@@ -187,7 +236,12 @@ export function canShimmy(
 ): boolean {
   const c = colliders.find((x) => x.id === probe.colliderId && !x.disabled);
   if (!c) return false;
-  const x = probe.targetX + probe.tangentX * sign * distance;
-  const z = probe.targetZ + probe.tangentZ * sign * distance;
+  // targetX/Z are the capsule center while hanging. Check the physical hand
+  // envelope against the ledge, not the body center left behind its face.
+  const handReach = 0.36;
+  const forwardX = probe.tangentZ;
+  const forwardZ = -probe.tangentX;
+  const x = probe.targetX + forwardX * handReach + probe.tangentX * sign * distance;
+  const z = probe.targetZ + forwardZ * handReach + probe.tangentZ * sign * distance;
   return pointInXZ(c, x, z, 0.22);
 }

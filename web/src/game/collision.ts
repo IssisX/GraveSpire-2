@@ -16,6 +16,8 @@ export type Collider = {
   surfaceAngularZ?: number;
   surfacePivotX?: number;
   surfacePivotY?: number;
+  /** A real climbable face; this is collision geometry, never a trigger volume. */
+  climbable?: { normalX: number; normalZ: number };
 };
 
 export type Capsule = {
@@ -104,7 +106,9 @@ export function moveCapsule(
   let groundedId: string | null = null;
   let hitHead = false;
   for (const c of list) {
-    if (!overlapX(c, x, r * 0.9) || !overlapZ(c, z, r * 0.9)) continue;
+    // Support is decided from the actual capsule footprint. The tiny inset
+    // avoids numerical flicker at an AABB corner without inventing a ledge.
+    if (!overlapX(c, x, r * 0.98) || !overlapZ(c, z, r * 0.98)) continue;
     if (y < c.maxy && y + h > c.miny) {
       const fromAbove = cap.y >= c.maxy - 0.08 || vy <= 0;
       const fromBelow = cap.y + cap.h <= c.miny + 0.08 || vy > 0;
