@@ -26,9 +26,11 @@ struct FreightState {
   double vertical_velocity_mps{0.0};
   double lateral_velocity_mps{0.0};
   double payload_kg{8200.0};
+  double cable_unstretched_m{3.907681};
   double cable_tension_n{0.0};
   double brake_temperature_k{293.15};
   bool brake_engaged{true};
+  bool brake_slipping{false};
 };
 
 struct FrameState {
@@ -64,13 +66,28 @@ class Simulation final {
   static constexpr double kAuthorityDt = 1.0 / 30.0;
   static constexpr double kMechanicsDt = 1.0 / 120.0;
   static constexpr int kSubsteps = 4;
+  static constexpr double kWinchDeckM = 6.15;
+  static constexpr double kRatedPayloadKg = 8200.0;
 
   Simulation() = default;
 
   void set_command(Command command, bool active);
+  void set_payload_kg(double payload_kg);
   void advance_authority_tick();
   [[nodiscard]] const WorldState& state() const noexcept;
   [[nodiscard]] bool finite() const noexcept;
+
+  // Derived from committed physical state — not independent flags.
+  [[nodiscard]] bool gallery_passable() const noexcept;
+  [[nodiscard]] bool neck_walk_clear() const noexcept;
+  [[nodiscard]] bool carrier_at_recv() const noexcept;
+  [[nodiscard]] bool act1_shop_open() const noexcept;
+  [[nodiscard]] bool act1_local_competence() const noexcept;
+  [[nodiscard]] double gate_jam_multiplier() const noexcept;
+  [[nodiscard]] double brake_hold_capacity_n() const noexcept;
+  [[nodiscard]] double cable_geometry_m() const noexcept;
+  [[nodiscard]] double cable_extension_m() const noexcept;
+  [[nodiscard]] bool brake_slipping() const noexcept;
 
  private:
   void step_mechanics(double dt);
@@ -81,4 +98,3 @@ class Simulation final {
 };
 
 }  // namespace gravespire
-

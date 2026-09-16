@@ -1,5 +1,5 @@
 ; Engine configuration file.
-; Godot 4.7.2 baseline.
+; Godot 4.7.2 baseline. First-person Bay 07 recovery slice.
 
 config_version=5
 
@@ -8,6 +8,7 @@ config_version=5
 config/name="GRAVESPIRE"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
+config/icon="res://icon.svg"
 
 [display]
 
@@ -18,10 +19,21 @@ window/size/window_height_override=920
 window/stretch/mode="canvas_items"
 window/handheld/orientation=3
 
+[physics]
+
+common/physics_ticks_per_second=60
+3d/physics_engine="Jolt Physics"
+jolt_physics_3d/simulation/velocity_steps=10
+jolt_physics_3d/simulation/position_steps=2
+
 [rendering]
 
 renderer/rendering_method="mobile"
 renderer/rendering_method.mobile="mobile"
+textures/vram_compression/import_etc2_astc=true
 textures/default_filters/use_nearest_mipmap_filter=false
 environment/defaults/default_clear_color=Color(0.012, 0.016, 0.019, 1)
 
+[android]
+
+modules=""
