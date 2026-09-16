@@ -323,7 +323,7 @@ export function SettingsScreen({ handleRef }: { handleRef: MutableRefObject<Game
                 onChange={(v) => set({ lightQuality: v })}
               />
             </Row>
-            <Row label="Steam density" hint="Discharge particle budget">
+            <Row label="Atmosphere" hint="Airborne dust, light shafts, vent steam">
               <Slider value={s.effectDensity} min={0} max={1} step={0.05} format={(v) => `${Math.round(v * 100)}%`} onChange={(v) => set({ effectDensity: v })} />
             </Row>
           </section>

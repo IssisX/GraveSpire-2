@@ -132,6 +132,42 @@ export function createMaterials() {
     4,
   );
 
+  // Precast wall panel: a field with a recessed joint on all four edges and
+  // weather streaking below it. The shared concrete map tiles far too small
+  // to carry a 45 m wall -- at that size it reads as noise, which is exactly
+  // the flat "surface with no scale" look the envelope is here to fix.
+  const panelMap = canvasTex(
+    256,
+    (g, s2) => {
+      g.fillStyle = "#3c4348";
+      g.fillRect(0, 0, s2, s2);
+      const inset = 5;
+      g.fillStyle = "#585f62";
+      g.fillRect(inset, inset, s2 - inset * 2, s2 - inset * 2);
+      // Cast-in mottle.
+      for (let i = 0; i < 900; i++) {
+        const v = 70 + Math.random() * 30;
+        g.fillStyle = `rgba(${v},${v + 4},${v + 6},${0.06 + Math.random() * 0.12})`;
+        g.fillRect(inset + Math.random() * (s2 - inset * 2), inset + Math.random() * (s2 - inset * 2), 2 + Math.random() * 5, 2);
+      }
+      // Streaks running down from the top joint.
+      for (let i = 0; i < 26; i++) {
+        const x = inset + Math.random() * (s2 - inset * 2);
+        const h = 20 + Math.random() * (s2 * 0.7);
+        g.fillStyle = `rgba(28,30,30,${0.05 + Math.random() * 0.1})`;
+        g.fillRect(x, inset, 1 + Math.random() * 3, h);
+      }
+      // Lift off the bottom joint so the panel reads as catching light.
+      const grad = g.createLinearGradient(0, s2 * 0.55, 0, s2 - inset);
+      grad.addColorStop(0, "rgba(255,255,255,0)");
+      grad.addColorStop(1, "rgba(255,255,255,0.05)");
+      g.fillStyle = grad;
+      g.fillRect(inset, s2 * 0.55, s2 - inset * 2, s2 * 0.45 - inset);
+    },
+    10,
+    4,
+  );
+
   const paint = (color: number, metal = 0.72, rough = 0.48, map?: THREE.Texture) =>
     new THREE.MeshStandardMaterial({
       color,
@@ -187,10 +223,21 @@ export function createMaterials() {
     }),
     cable: paint(0xb9c1c4, 0.85, 0.3),
     black: paint(0x0a0c0e, 0.4, 0.7),
+    // Envelope. Precast wall panel and ribbed roof deck for the halls the
+    // structure actually holds up, and raw shotcrete for the outer hull the
+    // whole facility is cut into. All three are dielectric and rough: they
+    // are meant to sit behind the machinery and take lamp light without
+    // competing with it for specular.
+    wallPanel: paint(0xb6c0c4, 0.04, 0.95, panelMap),
+    roofDeck: paint(0x59636c, 0.35, 0.72, steelMap),
+    // Untextured on purpose: concreteMap draws a border on each tile, and
+    // at the hull's 100 m x 32 m faces that border tiles into a visible
+    // grid. Bare rough colour under fog is what distance should look like.
+    shotcrete: paint(0x4c4539, 0.02, 0.98),
     npcVest: paint(0xb08620, 0.15, 0.7),
     npcSkin: paint(0x8a6a52, 0.05, 0.85),
     npcHelm: paint(0xc8b44a, 0.2, 0.55),
-    textures: { concreteMap, steelMap, rustMap, hazardMap, gratingMap, diamondMap },
+    textures: { concreteMap, steelMap, rustMap, hazardMap, gratingMap, diamondMap, panelMap },
   };
 
   return mats;

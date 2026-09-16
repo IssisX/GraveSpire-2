@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import type { Collider } from "./collision.ts";
-import { createMaterials, makeSignTexture, type Materials } from "./materials.ts";
+import { createMaterials, disposeMaterials, makeSignTexture, type Materials } from "./materials.ts";
 import type { Interactable, InteractKind } from "./context.ts";
+import { Atmosphere } from "./atmosphere.ts";
 import type { BodyState } from "@/sim/bodies.ts";
 
 export type { Interactable, InteractKind } from "./context.ts";
@@ -80,6 +81,9 @@ export type Level = {
   bindings: Bindings;
   materials: Materials;
   geos: THREE.BufferGeometry[];
+  /** Dust, light shafts and lamp unsteadiness. Ticked once per rendered
+   *  frame by the runtime, after the frame's light intensities are set. */
+  atmosphere: Atmosphere;
   dispose: () => void;
 };
 
@@ -87,6 +91,8 @@ class Kit {
   colliders: Collider[] = [];
   interactables: Interactable[] = [];
   geos: THREE.BufferGeometry[] = [];
+  /** Every fixture built here, for the atmosphere to take over at the end. */
+  lamps: { light: THREE.PointLight; sodium: boolean; drop: number }[] = [];
   constructor(
     public scene: THREE.Scene,
     public mats: Materials,
@@ -197,7 +203,39 @@ class Kit {
     return mesh;
   }
 
-  lightFixture(x: number, y: number, z: number, sodium = true): THREE.PointLight {
+  /**
+   * An envelope panel: a wall, a roof deck, or an outer hull face.
+   *
+   * Never casts. The scene's key light is a stylised overhead source standing
+   * in for a sky this facility does not have, so an envelope that cast from
+   * it would simply switch the hall it encloses off. The panels still
+   * receive, which is the whole point: they are the surfaces the lamps pool
+   * on and the fog grades across.
+   */
+  shell(
+    w: number,
+    h: number,
+    d: number,
+    x: number,
+    y: number,
+    z: number,
+    mat: THREE.Material,
+    opts?: { id?: string; collider?: boolean },
+  ): THREE.Mesh {
+    return this.box(w, h, d, x, y, z, mat, {
+      id: opts?.id ?? "shell",
+      collider: opts?.collider ?? true,
+      cast: false,
+    });
+  }
+
+  /**
+   * @param shaftDrop How far the visible cone of this lamp reaches down, in
+   *   metres. 0 means no shaft -- used where a fixture sits under structure
+   *   that would cut the cone up, or close enough to the deck that there is
+   *   no air to see.
+   */
+  lightFixture(x: number, y: number, z: number, sodium = true, shaftDrop = 0): THREE.PointLight {
     this.box(0.9, 0.12, 0.35, x, y, z, this.mats.steelBlack, { collider: false, cast: false });
     this.box(0.7, 0.06, 0.22, x, y - 0.08, z, sodium ? this.mats.emissiveSodium : this.mats.emissiveCool, {
       collider: false,
@@ -207,6 +245,7 @@ class Kit {
     l.position.set(x, y - 0.3, z);
     l.castShadow = false;
     this.scene.add(l);
+    this.lamps.push({ light: l, sodium, drop: shaftDrop });
     return l;
   }
 
@@ -246,12 +285,22 @@ export function buildLevel(scene: THREE.Scene): Level {
   const shopLights: THREE.Mesh[] = [];
   const optionalLights: THREE.PointLight[] = [];
 
-  scene.background = new THREE.Color(0x10151a);
-  scene.fog = new THREE.Fog(0x10151a, 52, 128);
+  // Fog used to start at 52 m, which is further than the bay is long: every
+  // surface in it read at full contrast no matter how far away, so distance
+  // carried no information and the hall had no air in it. It now engages
+  // within the room and reaches the far end of the facility, which is what
+  // gives the envelope below its depth.
+  scene.background = new THREE.Color(0x171d23);
+  scene.fog = new THREE.Fog(0x1a2128, 11, 118);
 
-  const hemi = new THREE.HemisphereLight(0xc5d0d8, 0x2e261c, 1.05);
+  // Cooler and weaker flat fill than before, with a warm bounce off the deck.
+  // The ambient terms were strong enough to wash the sodium fixtures out to
+  // the same grey as everything else; pulling them back lets the lamps own
+  // the warm end and the fill own the cool end, so the space has a
+  // temperature gradient instead of one neutral value everywhere.
+  const hemi = new THREE.HemisphereLight(0xa8bccc, 0x6b5a3e, 0.98);
   scene.add(hemi);
-  const amb = new THREE.AmbientLight(0x9aa4ac, 0.58);
+  const amb = new THREE.AmbientLight(0x8d9cab, 0.4);
   scene.add(amb);
   const sun = new THREE.DirectionalLight(0xffe6c8, 2.7);
   sun.position.set(-18, 34, 12);
@@ -270,14 +319,23 @@ export function buildLevel(scene: THREE.Scene): Level {
   const wellLamp = new THREE.PointLight(0xffc07a, 32, 34, 1.0);
   wellLamp.position.set(21, 4.2, 0);
   scene.add(wellLamp);
+  // It is a bay fixture like any other. Left out of this list it was the
+  // one lamp the process bus could not switch off, so a blackout left a
+  // full-strength lamp and cone burning over the freight well.
+  bayLights.push(wellLamp);
 
   // --- floors (bay perimeter, well in center) ---
   k.box(42, 0.5, 8, 21, -0.25, -7.5, mats.concrete, { id: "floor_sw" });
   k.box(42, 0.5, 8, 21, -0.25, 7.5, mats.concrete, { id: "floor_n" });
   k.box(12, 0.5, 22, 4, -0.25, 0, mats.concrete, { id: "floor_w" });
   k.box(10, 0.5, 22, 37, -0.25, 0, mats.concrete, { id: "floor_e" });
-  k.box(8, 0.18, 22, 21, -0.02, -10.4, mats.hazard, { collider: false });
-  k.box(8, 0.18, 22, 21, -0.02, 10.4, mats.hazard, { collider: false });
+  // Perimeter hazard borders down the long walls. These used to run across
+  // the bay (8 wide, 22 deep) from x 17..25, which put 10 m of lit yellow
+  // deck sticking out past the south floor edge at z=-11.5 with nothing
+  // under it -- a floor that ended in mid-air was one of the clearest reads
+  // of "this is not a place". They now follow the walls they belong to.
+  k.box(42, 0.18, 2.2, 21, -0.02, -10.4, mats.hazard, { collider: false });
+  k.box(42, 0.18, 2.2, 21, -0.02, 10.4, mats.hazard, { collider: false });
 
   // pit walls
   k.box(22, 10, 0.4, 21, -5, -3.5, mats.steelDark, { collider: false });
@@ -300,6 +358,88 @@ export function buildLevel(scene: THREE.Scene): Level {
     k.ibeam(40, 21, y + 0.4, -10.2, "x", mats.steel);
     k.ibeam(40, 21, y + 0.4, 10.2, "x", mats.steel);
   }
+
+  // --- the envelope ---------------------------------------------------------
+  // Bay 07 was a floor, a set of columns and a truss roof with *nothing*
+  // between them: every gap between two structural members showed the flat
+  // scene background, and looking up or out showed a featureless field of it.
+  // No amount of lighting fixes that, because there was no surface for the
+  // light to land on. These are the walls and the roof deck the columns have
+  // always been holding up.
+  //
+  // Inner faces sit exactly on the floor edges so there is no sliver of gap
+  // to see through, and the panels are real colliders -- a wall you can walk
+  // through is the same lie as a wall that is not there.
+  const BAY = { x0: -2.0, x1: 42.0, z0: -11.5, z1: 11.5, roof: 14.4 };
+  const WT = 0.6;
+  const bayW = BAY.x1 - BAY.x0 + WT * 2;
+  const bayD = BAY.z1 - BAY.z0 + WT * 2;
+  // Height the gallery's own roof sits at; the bay's north side is solid
+  // below it only west of where the gallery starts, and clerestory above.
+  const GAL_ROOF = 10.6;
+  const GAL_X1 = 58.5;
+
+  k.shell(WT, BAY.roof, bayD, BAY.x0 - WT / 2, BAY.roof / 2, 0, mats.wallPanel, { id: "bay_wall_w" });
+  k.shell(bayW, BAY.roof, WT, (BAY.x0 + BAY.x1) / 2, BAY.roof / 2, BAY.z0 - WT / 2, mats.wallPanel, { id: "bay_wall_s" });
+  // North: solid west of the gallery, glazed strip above it further east.
+  k.shell(8.0 - (BAY.x0 - WT), BAY.roof, WT, (BAY.x0 - WT + 8.0) / 2, BAY.roof / 2, BAY.z1 + WT / 2, mats.wallPanel, {
+    id: "bay_wall_n",
+  });
+  k.shell(
+    BAY.x1 + WT - 8.0,
+    BAY.roof - GAL_ROOF,
+    WT,
+    (8.0 + BAY.x1 + WT) / 2,
+    (GAL_ROOF + BAY.roof) / 2,
+    BAY.z1 + WT / 2,
+    mats.wallPanel,
+    { id: "bay_clere_n", collider: false },
+  );
+  // East: the isolation gate is the only way through, so the wall is built
+  // around its opening rather than the opening being an invisible hole.
+  const GATE_HZ = 3.6;
+  const GATE_TOP = 6.9;
+  k.shell(WT, BAY.roof, BAY.z1 + WT - GATE_HZ, BAY.x1 + WT / 2, BAY.roof / 2, (GATE_HZ + BAY.z1 + WT) / 2, mats.wallPanel, {
+    id: "bay_wall_e_n",
+  });
+  k.shell(WT, BAY.roof, BAY.z1 + WT - GATE_HZ, BAY.x1 + WT / 2, BAY.roof / 2, -(GATE_HZ + BAY.z1 + WT) / 2, mats.wallPanel, {
+    id: "bay_wall_e_s",
+  });
+  k.shell(WT, BAY.roof - GATE_TOP, GATE_HZ * 2, BAY.x1 + WT / 2, (GATE_TOP + BAY.roof) / 2, 0, mats.wallPanel, {
+    id: "bay_head_e",
+  });
+  // Roof deck, with its purlins showing underneath so the ceiling reads as
+  // built rather than as a lid.
+  k.shell(bayW, 0.4, bayD, (BAY.x0 + BAY.x1) / 2, BAY.roof + 0.2, 0, mats.roofDeck, { id: "bay_roof" });
+  for (let x = 0; x <= 42; x += 3) {
+    k.box(0.22, 0.5, bayD, x, BAY.roof - 0.25, 0, mats.steel, { collider: false, cast: false });
+  }
+
+  // Gallery 12's envelope. Its north edge already had a railing looking out
+  // over nothing; this is what the railing is there to keep you off.
+  k.shell(GAL_X1 - 8.0, 11.0, WT, (8.0 + GAL_X1) / 2, 5.5, 28.2, mats.wallPanel, { id: "gal_wall_n" });
+  k.shell(GAL_X1 - 8.0, 0.4, 17.0, (8.0 + GAL_X1) / 2, GAL_ROOF + 0.2, 20.0, mats.roofDeck, { id: "gal_roof" });
+
+  // Outer hull. The bay and the gallery are enclosed above; everything else
+  // -- the transfer neck, the run east toward the shop -- still opened onto
+  // background colour. This is the rock the facility is cut into, far enough
+  // out and dark enough that it reads as distance through the fog rather
+  // than as another room. Render-only: the detailed walls above are the
+  // barriers that matter, and a collider out here could only ever trap
+  // someone who fell past the geometry that was supposed to stop them.
+  const HULL = { x0: -6, x1: 92, z0: -20, z1: 34, y0: -12, y1: 20 };
+  const HT = 1.5;
+  const hullW = HULL.x1 - HULL.x0 + HT * 2;
+  const hullD = HULL.z1 - HULL.z0 + HT * 2;
+  const hullH = HULL.y1 - HULL.y0;
+  const hullCx = (HULL.x0 + HULL.x1) / 2;
+  const hullCy = (HULL.y0 + HULL.y1) / 2;
+  const hullCz = (HULL.z0 + HULL.z1) / 2;
+  k.shell(HT, hullH, hullD, HULL.x0 - HT / 2, hullCy, hullCz, mats.shotcrete, { collider: false });
+  k.shell(HT, hullH, hullD, HULL.x1 + HT / 2, hullCy, hullCz, mats.shotcrete, { collider: false });
+  k.shell(hullW, hullH, HT, hullCx, hullCy, HULL.z0 - HT / 2, mats.shotcrete, { collider: false });
+  k.shell(hullW, hullH, HT, hullCx, hullCy, HULL.z1 + HT / 2, mats.shotcrete, { collider: false });
+  k.shell(hullW, HT, hullD, hullCx, HULL.y1 + HT / 2, hullCz, mats.shotcrete, { collider: false });
 
   // Lever stand: the counterweight lever (lever_beam, a real rigid body
   // pinned here by a joint, sim/world-init.ts) rides on this. No collider --
@@ -362,7 +502,7 @@ export function buildLevel(scene: THREE.Scene): Level {
   const beacon = k.box(0.18, 0.18, 0.18, 5.75, 2.45, -6.1, mats.emissiveWarn.clone(), { collider: false, cast: false });
   // The carrier is driven from here. Standing in the bay and looking at the
   // hook does not give you the hoist: you walk to the pulpit like everyone else.
-  bayLights.push(k.lightFixture(5.0, 6.2, -7.2, true));
+  bayLights.push(k.lightFixture(5.0, 6.2, -7.2, true, 5.6));
   k.interact("pulpit", "Carrier 07-A pulpit", 4.8, 1.75, -6.2, 2.9, "station", {
     lookRange: 16,
     noOcclusion: true,
@@ -495,9 +635,49 @@ export function buildLevel(scene: THREE.Scene): Level {
   // neck architecture
   k.box(22, 0.5, 20, 53, -0.25, 0, mats.concrete, { id: "neck_floor" });
   for (const x of [46, 54, 62]) {
-    for (const z of [-8.5, 8.5]) k.box(0.65, 10, 0.65, x, 5, z, mats.steelDark, { id: `ncol_${x}` });
+    for (const z of [-8.5, 8.5]) k.box(0.65, 10.6, 0.65, x, 5.3, z, mats.steelDark, { id: `ncol_${x}` });
   }
   k.ibeam(18, 53, 9.4, 0, "x", mats.steel);
+  // Neck envelope. The only lit space in Act I that still opened straight
+  // onto background colour. Its north wall carries the doorway the gallery
+  // stairs land in, so the wall is built around them rather than through them.
+  const NECK = { x0: 42.0, x1: 64.5, z0: -10.0, z1: 10.0, roof: 10.6 };
+  const NT = 0.5;
+  // Starts flush with the bay's east wall rather than overhanging it: an
+  // extra half metre west would have put neck wall inside the bay's own deck.
+  const neckW = NECK.x1 - NECK.x0 + NT;
+  // Head height over the doorway has to clear someone standing on the top
+  // step (y=2.36) and on the gallery deck (y=2.45), not just the floor.
+  const STAIR = { x0: 52.5, x1: 55.5, head: 4.6 };
+  k.shell(neckW, NECK.roof, NT, (NECK.x0 + NECK.x1 + NT) / 2, NECK.roof / 2, NECK.z0 - NT / 2, mats.wallPanel, {
+    id: "neck_wall_s",
+  });
+  k.shell(STAIR.x0 - NECK.x0, NECK.roof, NT, (NECK.x0 + STAIR.x0) / 2, NECK.roof / 2, NECK.z1 + NT / 2, mats.wallPanel, {
+    id: "neck_wall_n_w",
+  });
+  k.shell(NECK.x1 + NT - STAIR.x1, NECK.roof, NT, (STAIR.x1 + NECK.x1 + NT) / 2, NECK.roof / 2, NECK.z1 + NT / 2, mats.wallPanel, {
+    id: "neck_wall_n_e",
+  });
+  k.shell(
+    STAIR.x1 - STAIR.x0,
+    NECK.roof - STAIR.head,
+    NT,
+    (STAIR.x0 + STAIR.x1) / 2,
+    (STAIR.head + NECK.roof) / 2,
+    NECK.z1 + NT / 2,
+    mats.wallPanel,
+    { id: "neck_head_n" },
+  );
+  k.shell(neckW, 0.4, NECK.z1 - NECK.z0 + NT * 2, (NECK.x0 + NECK.x1 + NT) / 2, NECK.roof + 0.2, 0, mats.roofDeck, {
+    id: "neck_roof",
+  });
+  // The shop's own west wall stops at 6 m; this closes the strip above it.
+  k.shell(0.4, NECK.roof - 6.0, 22.0, 64.2, (6.0 + NECK.roof) / 2, -1.0, mats.wallPanel, { id: "neck_head_e" });
+  // Hung clear below the transfer i-beam at y=9.4: on its centreline the
+  // beam's lower flange sat directly under the lamp and hid it, leaving a
+  // shaft of light with no visible source.
+  bayLights.push(k.lightFixture(48, 8.6, 0, true, 7.6));
+  bayLights.push(k.lightFixture(58, 8.6, 0, true, 7.6));
   k.box(3.4, 2.2, 2.6, 56.2, 1.2, 2.4, mats.carrier, { id: "drive_box", collider: true });
   k.box(3.4, 0.08, 2.6, 56.2, 2.34, 2.4, mats.hazard, { collider: false });
   k.interact("drive", "Transfer drive housing", 56.2, 1.6, 1.0, 2.6, "machine", { lookRange: 26 });
@@ -510,9 +690,15 @@ export function buildLevel(scene: THREE.Scene): Level {
 
   k.sign("FS-07", "FREIGHT SPINE  ·  BAY 07", 8.5, 2.6, 0.4, 8.4, 0, Math.PI / 2);
   k.sign("G-07", "ISOLATION  ·  PRESSURE", 4.2, 1.4, 40.9, 7.4, -5.2, -Math.PI / 2);
-  k.sign("FS-08", "TRANSFER NECK", 5.2, 1.6, 42.3, 6.8, 8.2, Math.PI / 2);
+  // On the bay face of the east wall, not inside it: x=42.3 is now the
+  // middle of that wall's thickness, which would bury the sign in concrete.
+  k.sign("FS-08", "TRANSFER NECK", 5.2, 1.6, 41.94, 6.8, 8.2, -Math.PI / 2);
+  // Laid flat, the decal's texture-right ran to +x and its texture-up to -z,
+  // which reads mirrored to anyone walking north onto it from the bay floor
+  // -- the only direction you can approach it from. The extra half turn in
+  // the plane's own frame points it back at the reader.
   const bayDecal = k.sign("07", "FREIGHT WELL", 7.2, 3.6, 21, 0.05, 7.15, 0);
-  bayDecal.rotation.x = -Math.PI / 2;
+  bayDecal.rotation.set(-Math.PI / 2, 0, Math.PI);
   bayDecal.position.set(21, 0.04, 7.15);
 
   // pit internals — the well is a volume, not a black rectangle
@@ -535,9 +721,11 @@ export function buildLevel(scene: THREE.Scene): Level {
 
   // lights bay
   for (const x of [8, 18, 28, 36]) {
-    bayLights.push(k.lightFixture(x, 12.4, 0, true));
-    optionalLights.push(k.lightFixture(x, 8.8, 9.1, false));
-    optionalLights.push(k.lightFixture(x, 8.8, -9.1, false));
+    bayLights.push(k.lightFixture(x, 12.4, 0, true, 11.4));
+    // Aisle fixtures sit barely 3 m above their catwalk; the cone is cut
+    // short so it lands on the grating instead of passing through it.
+    optionalLights.push(k.lightFixture(x, 8.8, 9.1, false, 2.9));
+    optionalLights.push(k.lightFixture(x, 8.8, -9.1, false, 2.9));
   }
 
   // --- Gallery 12 ---
@@ -561,8 +749,12 @@ export function buildLevel(scene: THREE.Scene): Level {
   k.railing(9, 27.2, 57, 27.2, 2.45);
   k.railing(9, 11.8, 13, 11.8, 2.45);
   k.sign("LT-12", "LOAD-TRANSFER GALLERY", 6.4, 1.6, 33, 5.4, 27.6, Math.PI);
-  optionalLights.push(k.lightFixture(24, 7.2, 19.5, false));
-  optionalLights.push(k.lightFixture(42, 7.2, 19.5, false));
+  // Two fixtures for a 50 m deck left most of the gallery -- and all of its
+  // ceiling -- unlit. Four, hung close under the roof so the deck above the
+  // lamps is lit too rather than reading as a slab of nothing.
+  for (const x of [15, 27, 39, 51]) {
+    optionalLights.push(k.lightFixture(x, 9.6, 19.5, false, 6.7));
+  }
 
   // stairs gallery to neck
   for (let i = 0; i < 6; i++) {
@@ -590,7 +782,7 @@ export function buildLevel(scene: THREE.Scene): Level {
   for (const x of [68, 75, 82]) {
     const fixture = k.box(1.4, 0.1, 0.3, x, 5.9, -2, mats.emissiveCool, { collider: false, cast: false });
     shopLights.push(fixture);
-    optionalLights.push(k.lightFixture(x, 5.9, -2, false));
+    optionalLights.push(k.lightFixture(x, 5.9, -2, false, 5.3));
   }
   // crates
   k.box(1.4, 1.2, 1.1, 68, 0.6, 5.4, mats.paintGreen, { id: "crate1" });
@@ -661,6 +853,39 @@ export function buildLevel(scene: THREE.Scene): Level {
 
   k.interact("cable", "Hoist rope 07-A", 20, 6, 0, 3.0, "machine", { lookRange: 36 });
 
+  // --- atmosphere ----------------------------------------------------------
+  // Every fixture the kit built, handed over in one place. The atmosphere
+  // reads whatever intensity each light's owner sets (electrical load,
+  // quality settings) as that lamp's base, so this never has to know why a
+  // light is dim -- only that it is.
+  const atmosphere = new Atmosphere(scene);
+  for (const lamp of k.lamps) {
+    atmosphere.addLamp(lamp.light, {
+      // Sodium is the twitchy one: it swims and strikes. The cool fixtures
+      // are electronic ballasts and sit much steadier.
+      restless: lamp.sodium ? 0.6 : 0.22,
+      shaft:
+        lamp.drop > 0
+          ? {
+              radius: lamp.drop * 0.3,
+              length: lamp.drop,
+              color: lamp.sodium ? 0xffc489 : 0xcfe0ec,
+              strength: lamp.sodium ? 0.2 : 0.14,
+            }
+          : undefined,
+    });
+  }
+  // The well lamp is a bare fitting, not a kit fixture, and it is the only
+  // thing lighting the pit: its cone is what makes the well read as a hole
+  // with depth instead of a black rectangle in the floor.
+  atmosphere.addLamp(wellLamp, {
+    restless: 0.75,
+    shaft: { radius: 2.1, length: 5.0, color: 0xffb877, strength: 0.22 },
+  });
+  // The hook light travels with the load, so it gets the unsteadiness but no
+  // shaft -- a shaft mesh would have to be re-placed every frame to follow it.
+  atmosphere.addLamp(hookLight, { restless: 0.3 });
+
   const bindings: Bindings = {
     carrier,
     payload,
@@ -689,7 +914,10 @@ export function buildLevel(scene: THREE.Scene): Level {
     bindings,
     materials: mats,
     geos: k.geos,
+    atmosphere,
     dispose: () => {
+      atmosphere.dispose();
+      disposeMaterials(mats);
       consoleMat.dispose();
       k.geos.forEach((g) => g.dispose());
       steamGeo.dispose();

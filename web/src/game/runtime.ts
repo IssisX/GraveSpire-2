@@ -161,6 +161,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
 
     const steamDraw = Math.round(level.bindings.steamCount * next.effectDensity);
     level.bindings.steam.geometry.setDrawRange(0, steamDraw);
+    level.atmosphere.setDensity(next.effectDensity);
 
     camera.fov = next.fov;
     camera.updateProjectionMatrix();
@@ -176,6 +177,18 @@ export function mountGame(canvas: HTMLCanvasElement) {
 
   function touchNow(): boolean {
     return useGame.getState().touch;
+  }
+
+  /**
+   * The single place a frame reaches the screen. Every phase -- attract,
+   * intro, paused, playing -- goes through here, so the atmosphere is ticked
+   * once per rendered frame and against the camera that frame actually used.
+   * It runs after bindView(), which is what sets the lamp intensities it
+   * modulates.
+   */
+  function present(dt: number) {
+    level.atmosphere.update(dt, camera, renderer.domElement.height);
+    renderer.render(scene, camera);
   }
 
   // ------------------------------------------------------------------ layout
@@ -284,7 +297,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
     }
 
     level.bindings.hookLight.position.set(pos.x, pos.y + 0.5, pos.z);
-    level.bindings.hookLight.intensity = s.electrical.bay_lights ? 22 : 3;
+    level.atmosphere.setLampBase(level.bindings.hookLight, s.electrical.bay_lights ? 22 : 3);
     const gantryY = 11.1 - defl * 2.4;
     level.bindings.gantry.position.y = gantryY;
     const cableLen = Math.max(0.3, gantryY - pos.y - 0.4);
@@ -338,7 +351,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
     // Bay fixtures sag as the process bus approaches its rating, then die with
     // it. The light is a reading of the electrical state, not decoration.
     for (const l of level.bindings.bayLights) {
-      l.intensity = s.electrical.bay_lights ? 24 * (1 - 0.38 * thermal) : 0.9;
+      level.atmosphere.setLampBase(l, s.electrical.bay_lights ? 24 * (1 - 0.38 * thermal) : 0.9);
     }
 
     const venting = s.gate.vent_open || sim.active("GateVent");
@@ -769,7 +782,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
         accAuth -= 1 / 30;
       }
       bindView();
-      renderer.render(scene, camera);
+      present(dt);
       requestAnimationFrame(loop);
       return;
     }
@@ -814,7 +827,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
           });
         }
       }
-      renderer.render(scene, camera);
+      present(dt);
       requestAnimationFrame(loop);
       return;
     }
@@ -832,7 +845,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
     }
 
     if (phase !== "playing") {
-      renderer.render(scene, camera);
+      present(dt);
       requestAnimationFrame(loop);
       return;
     }
@@ -1044,7 +1057,7 @@ export function mountGame(canvas: HTMLCanvasElement) {
       useGame.getState().patch({ ending: endingCopy(s) });
     }
 
-    renderer.render(scene, camera);
+    present(dt);
     requestAnimationFrame(loop);
   }
 

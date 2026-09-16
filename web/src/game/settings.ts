@@ -34,7 +34,8 @@ export interface Settings {
   shadowResolution: 512 | 1024 | 2048;
   /** Toggles the optional secondary light fixtures in the scene. */
   lightQuality: LightQuality;
-  /** Fraction of the steam point budget that is drawn. */
+  /** Fraction of the atmospheric effect budget that is drawn: vent steam,
+   *  suspended dust, and the visible cones under the lamps. 0 draws none. */
   effectDensity: number;
   /** Vertical-ish base FOV in degrees at landscape aspect. */
   fov: number;

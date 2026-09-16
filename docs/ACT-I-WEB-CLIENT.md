@@ -300,12 +300,20 @@ every command it was driving.
 input handling or a real renderer/scene control: look and touch sensitivity,
 invert Y, movement deadzone, auto sprint, gait intensity, FOV, HUD density,
 prompt mode, render scale, shadow enable and resolution, secondary light
-fixtures, steam particle budget, master volume.
+fixtures, atmospheric effect budget, master volume.
 
-There is deliberately **no** texture-resolution, reflection, volumetric,
-post-processing, or antialiasing setting, because this renderer does not
-implement those systems and a control that changes nothing is a lie. Settings
-persist to `localStorage` and never alter mechanical world truth.
+`effectDensity` used to be labelled "Steam density" and drove only the G-07
+vent particles. It now scales the dust field and the light shafts as well, so
+the row is labelled **Atmosphere** and its hint names all three. A control
+whose label understates what it switches off is the same lie as a control that
+does nothing.
+
+There is deliberately **no** texture-resolution, reflection, post-processing,
+or antialiasing setting, because this renderer does not implement those
+systems and a control that changes nothing is a lie. The light shafts are
+*not* a post-processing effect: they are cone meshes with a real depth test,
+occluded by structure like everything else. Settings persist to
+`localStorage` and never alter mechanical world truth.
 
 ## Delivery
 
@@ -433,6 +441,115 @@ browser verification above, which is what actually confirmed the render
 fix — a passing test suite doesn't look at pixels.
 
 97/97 tests.
+
+## Atmosphere and the envelope (`web/src/game/atmosphere.ts`)
+
+The bay used to read as a nightmare of empty latent space, and the diagnosis
+was not "too dark". Four things were missing, and only one of them was light:
+
+1. **There was no building.** Bay 07 was a floor, six pairs of columns and a
+   truss roof with *nothing* between them. Every gap between two structural
+   members showed the flat scene background, and looking up showed a
+   featureless field of it. The pipes described in the source as running
+   "along the south wall" hung in space, because there was no south wall. Only
+   the Circ Shop had ever been enclosed.
+2. **Distance carried no information.** `THREE.Fog` started at 52 m. The bay
+   is 42 m long, so fog never engaged anywhere a player could stand, and every
+   surface read at identical contrast regardless of range.
+3. **Nothing was in the air.** The only particle system was vent steam, hidden
+   unless G-07 was discharging. The lamps lit surfaces and nothing else.
+4. **Nothing moved.** A still frame and a running frame were identical.
+
+### The envelope
+
+`Kit.shell()` builds a wall, roof deck, or hull face: a collider by default,
+never a shadow caster. The key light is a stylised overhead source standing in
+for a sky this facility does not have, so an envelope that cast from it would
+switch off the hall it encloses.
+
+Bay 07, Gallery 12 and the transfer neck now have real walls and roof decks,
+with openings built *around* the routes through them rather than punched as
+invisible holes: the bay's east wall is built around the isolation gate, and
+the neck's north wall is built around the doorway the gallery stairs land in.
+Outside all of it sits a render-only shotcrete hull — the rock the facility is
+cut into — so the spaces with no detailed envelope still resolve into distance
+under fog rather than into background colour. Fog now runs 11 → 118 m, which
+engages inside the room it is supposed to describe.
+
+### The air
+
+`Atmosphere` owns three things and no world truth:
+
+- **Dust.** A fixed 1100-point buffer wrapped into a 22 m cube around the eye
+  (`wrapIntoBox`), so the field is endless and uniform while the buffer never
+  grows. Drawn with a small shader rather than `PointsMaterial` because an
+  unclamped size-attenuated point a third of a metre from the eye is a 75-pixel
+  additive blob over the crosshair; the size is capped and the alpha faded over
+  the first 1.9 m and again at the far edge, so the wrap boundary never shows.
+- **Light shafts.** Open cones under each fixture. Brightness is
+  `|dot(normal, view)|`, which is proportional to how much air the view ray
+  crossed inside the cone, so it reads as a volume rather than as a
+  cone-shaped object. They are faded by the same range as the scene fog,
+  because additive geometry gets none from three and a distant cone at full
+  strength inverts the depth cue the fog exists to give.
+- **Lamp life.** Two slow incommensurate terms plus a rare strike dip. Sodium
+  fittings are restless; the electronic ballasts sit steady.
+
+**One writer.** After `addLamp`, the Atmosphere is the only thing that writes
+`light.intensity`; `bindView` calls `atmosphere.setLampBase(light, v)` instead
+of assigning. Two systems racing on one field would have meant the flicker
+compounding into its own base and every lamp in the bay decaying to black.
+
+**Shafts read the bus.** A shaft's strength is the lamp's live output over
+`designOutput` — the highest base that fixture has ever been asked for. It
+cannot be the construction value: `Kit.lightFixture` builds sodium fittings at
+their catalogue 14 and the runtime drives the bay at 24, so a frozen
+registration value would peg every cone at full strength through the entire
+derating range. Verified live: tripping the generator breaker takes the bay
+from 24 to 0.9 and every cone in the level switches off with it.
+
+### Defects found and fixed while enclosing the level
+
+- The perimeter hazard borders ran *across* the bay (8 wide, 22 deep) instead
+  of along it, putting ten metres of lit yellow deck out past the south floor
+  edge with nothing under it. A floor that ends in mid-air was one of the
+  clearest reads of "this is not a place".
+- The `07 FREIGHT WELL` deck decal rendered mirrored from the only direction
+  you can walk onto it from.
+- `disposeMaterials()` was exported and had zero callers, so every material and
+  texture in the level leaked on teardown. `level.dispose()` calls it now.
+
+### Caught by `/code-review` and fixed in the same pass
+
+- `designBase` frozen at registration, which made the shaft/bus coupling
+  decorative — replaced with the running `designOutput`.
+- The lamp base recovered by float-equality against our own last write —
+  replaced with explicit single-writer ownership (`setLampBase`).
+- `setDensity()` re-showing every cone at full strength for a frame, including
+  cones under lamps that were switched off.
+- The `FS-08 TRANSFER NECK` sign placed at x=42.3, which the new east wall now
+  occupies exactly; it was buried inside the concrete and invisible from both
+  sides.
+- `wellLamp` in no binding array, so it was the one lamp the process bus could
+  not switch off — a full-strength lamp and cone burning through a blackout.
+- The neck fixtures hung on the transfer i-beam's own centreline, so its lower
+  flange hid the emissive element and its web ran through the housing.
+- The roof deck floating a metre above the trusses carrying it, and the neck
+  columns stopping 0.6 m short of their ceiling.
+- The rewritten hazard borders still overhanging `floor_w`'s corners by 2 m.
+- Motes close to the eye rendering as large additive blobs.
+- The settings row still labelled "Steam density".
+
+### Verified
+
+- 117/117 authority checks, including the mote wrap law (a field that still
+  follows the eye after a 1200 m move) and the design-output law.
+- A flood-fill reachability audit in a headless browser: every deck — bay,
+  neck, gallery, catwalk — is still one connected walkable region with every
+  landmark reachable. Two initial failures were the audit's own landmarks, one
+  standing inside the pulpit's solid box and one behind the shop door that is
+  locked at that point in the act.
+- No shader compile or link errors under swiftshader.
 
 ## The Ascent — a second mode, first vertical slice
 

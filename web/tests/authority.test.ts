@@ -28,6 +28,7 @@ import { ContextResolver, eyePose, type Interactable } from "@/game/context.ts";
 import type { Collider } from "@/game/collision.ts";
 import { Player } from "@/game/player.ts";
 import type { Actions } from "@/game/input.ts";
+import { designOutput, wrapIntoBox } from "@/game/atmosphere.ts";
 
 let failures = 0;
 let checks = 0;
@@ -911,6 +912,59 @@ group("the parachute: arcade flight, always-survivable landings");
     "it stays safely resolved for many further frames, not just the landing instant",
     bottom.grounded && bottom.y === -30 && bottom.fallDamage() === "none",
   );
+}
+
+// --- atmosphere: the two laws the air runs on ------------------------------
+// The renderer parts of this module need a GL context, but the two things
+// that can silently rot do not: the mote field's wrap and a fixture's healthy
+// output. Both are pure, and both fail invisibly -- a wrong wrap leaks the
+// dust field away from the eye over minutes, and a wrong design output leaves
+// every light shaft at full strength through a total bus derating.
+group("the atmosphere: dust that follows the eye, shafts that read the bus");
+{
+  const BOX = 22;
+  check("a mote already inside the box around the eye is left alone", wrapIntoBox(103, 100, BOX) === 103);
+  check(
+    "a mote that drifts out one side comes back the other, a full box away",
+    Math.abs(wrapIntoBox(100 + BOX / 2 + 0.5, 100, BOX) - (100 - BOX / 2 + 0.5)) < 1e-9,
+    `wrapped to ${wrapIntoBox(100 + BOX / 2 + 0.5, 100, BOX)}`,
+  );
+  // The field has to survive the eye moving much further than one box --
+  // falling down the well, or a whole climb -- without being left behind.
+  let far = 0;
+  for (const eye of [0, 40, -95, 610, -1200]) far = wrapIntoBox(far, eye, BOX);
+  check(
+    "the field follows the eye across arbitrarily long moves, not just short ones",
+    Math.abs(far - -1200) <= BOX / 2 + 1e-9,
+    `mote at ${far.toFixed(2)} for an eye at -1200 (box ${BOX})`,
+  );
+  check(
+    "wrapping is idempotent -- a settled mote does not keep jumping",
+    wrapIntoBox(wrapIntoBox(517, 100, BOX), 100, BOX) === wrapIntoBox(517, 100, BOX),
+  );
+
+  // A fixture's healthy output. The shaft thins as `out / designOutput`, so
+  // if this stayed at the catalogue intensity a lamp is *constructed* with
+  // (14) while the runtime drives it at 24, every cone would sit pinned at
+  // full strength across the entire derating range and the coupling the
+  // module documents would do nothing.
+  let design = 14; // Kit.lightFixture's sodium value at construction
+  design = designOutput(design, 24); // first healthy frame from the bus
+  check("design output calibrates up to what the bus actually asks for", design === 24);
+  for (const derated of [24 * (1 - 0.38 * 0.5), 24 * (1 - 0.38 * 1), 0.9]) {
+    design = designOutput(design, derated);
+  }
+  check(
+    "a sagging or dead bus never redefines healthy -- the design output holds",
+    design === 24,
+    `design=${design}`,
+  );
+  check(
+    "a fully derated lamp therefore reads as well under full output",
+    (24 * (1 - 0.38 * 1)) / design < 0.63,
+    `lit ratio ${((24 * (1 - 0.38)) / design).toFixed(2)} at thermal=1`,
+  );
+  check("a blacked-out lamp reads as effectively off", 0.9 / design < 0.04);
 }
 
 console.log(`\n${failures === 0 ? "PASS" : "FAIL"}: ${checks - failures}/${checks} authority reference checks`);
