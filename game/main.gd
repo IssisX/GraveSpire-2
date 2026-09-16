@@ -36,6 +36,7 @@ func _ready() -> void:
 		simulation.name = "Simulation"
 		add_child(simulation)
 		simulation.process_physics_priority = -20
+		simulation.set_physics_process(true)
 	else:
 		missing_authority = true
 	_world()
