@@ -34,6 +34,12 @@ void SimulationBridge::set_action(
   static const godot::StringName gate_open("gate_open");
   static const godot::StringName gate_close("gate_close");
   static const godot::StringName gate_wedge("gate_wedge");
+  static const godot::StringName spire_lift_up("spire_lift_up");
+  static const godot::StringName spire_lift_down("spire_lift_down");
+  static const godot::StringName sky_ballast_left("sky_ballast_left");
+  static const godot::StringName sky_ballast_right("sky_ballast_right");
+  static const godot::StringName sky_car_brake("sky_car_brake");
+  static const godot::StringName wind_car_brake("wind_car_brake");
 
   if (action == carrier_raise) {
     simulation_.set_command(Command::CarrierRaise, enabled);
@@ -59,22 +65,32 @@ void SimulationBridge::set_action(
     simulation_.set_command(Command::GateClose, enabled);
   } else if (action == gate_wedge) {
     simulation_.set_command(Command::GateWedge, enabled);
+  } else if (action == spire_lift_up) {
+    simulation_.set_command(Command::SpireLiftUp, enabled);
+  } else if (action == spire_lift_down) {
+    simulation_.set_command(Command::SpireLiftDown, enabled);
+  } else if (action == sky_ballast_left) {
+    simulation_.set_command(Command::SkyBallastLeft, enabled);
+  } else if (action == sky_ballast_right) {
+    simulation_.set_command(Command::SkyBallastRight, enabled);
+  } else if (action == sky_car_brake) {
+    simulation_.set_command(Command::SkyCarBrake, enabled);
+  } else if (action == wind_car_brake) {
+    simulation_.set_command(Command::WindCarBrake, enabled);
   }
 }
 
 godot::Dictionary SimulationBridge::snapshot() const {
   const auto& state = simulation_.state();
   godot::Dictionary out;
-  out["authority_tick"] = static_cast<std::int64_t>(
-      state.authority_tick);
+  out["authority_tick"] = static_cast<std::int64_t>(state.authority_tick);
   out["carrier_height_m"] = state.freight.height_m;
   out["carrier_lateral_m"] = state.freight.lateral_m;
   out["carrier_vy"] = state.freight.vertical_velocity_mps;
   out["carrier_vx"] = state.freight.lateral_velocity_mps;
   out["payload_kg"] = state.freight.payload_kg;
   out["cable_tension_n"] = state.freight.cable_tension_n;
-  out["brake_temperature_k"] =
-      state.freight.brake_temperature_k;
+  out["brake_temperature_k"] = state.freight.brake_temperature_k;
   out["brake_engaged"] = state.freight.brake_engaged;
   out["brake_slipping"] = simulation_.brake_slipping();
   out["brake_hold_n"] = simulation_.brake_hold_capacity_n();
@@ -96,6 +112,28 @@ godot::Dictionary SimulationBridge::snapshot() const {
   out["carrier_at_recv"] = simulation_.carrier_at_recv();
   out["act1_shop_open"] = simulation_.act1_shop_open();
   out["act1_local_competence"] = simulation_.act1_local_competence();
+
+  out["spire_lift_q_m"] = state.spire.lift_q_m;
+  out["spire_lift_v_mps"] = state.spire.lift_velocity_mps;
+  out["spire_lift_brake_engaged"] = state.spire.lift_brake_engaged;
+  out["spire_lift_brake_slipping"] = state.spire.lift_brake_slipping;
+  out["spire_bridge_latch_m"] = state.spire.bridge_latch_m;
+  out["spire_bridge_angle_rad"] = state.spire.bridge_angle_rad;
+  out["spire_bridge_omega_radps"] = state.spire.bridge_angular_velocity_radps;
+  out["spire_bridge_walkable"] = simulation_.spire_bridge_walkable();
+  out["spire_sky_ballast_x_m"] = state.spire.sky_ballast_x_m;
+  out["spire_sky_ballast_loaded"] = simulation_.spire_sky_ballast_loaded();
+  out["spire_sky_car_q_m"] = state.spire.sky_car_q_m;
+  out["spire_sky_car_v_mps"] = state.spire.sky_car_velocity_mps;
+  out["spire_sky_car_brake_engaged"] = state.spire.sky_car_brake_engaged;
+  out["spire_sky_car_brake_slipping"] = state.spire.sky_car_brake_slipping;
+  out["spire_wind_latch_m"] = state.spire.wind_latch_m;
+  out["spire_wind_unlocked"] = simulation_.spire_wind_unlocked();
+  out["spire_wind_car_q_m"] = state.spire.wind_car_q_m;
+  out["spire_wind_car_v_mps"] = state.spire.wind_car_velocity_mps;
+  out["spire_wind_car_brake_engaged"] = state.spire.wind_car_brake_engaged;
+  out["spire_wind_car_brake_slipping"] = state.spire.wind_car_brake_slipping;
+
   out["finite"] = simulation_.finite();
   return out;
 }
