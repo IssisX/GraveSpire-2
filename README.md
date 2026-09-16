@@ -30,11 +30,15 @@ First-person Freight Spine Bay 07:
 - Fold-first move / look / contextual Action;
 - walk, sprint, crouch, jump, step-over, mantle, ladder, moving-carrier ride;
 - operate Carrier 07-A only from the pulpit pendant;
+- the hoist brake holds the drum; raise/lower pays unstretched cable length
+  and does not teleport the load; a slack cable does not push;
+- overload above rated hold slips the brake and heats it;
 - vent / open the isolation gate from its local panel;
 - jack / brace the transfer frame from its local station;
 - a pressurized gate cannot be shoved open — venting unloads it, jack/brace
   clears the neck, and the east gallery becomes a physical route;
 - recv lamps follow the carrier envelope, not a HUD flag;
+- Act I local competence is `shop route open` AND `carrier in recv envelope`;
 - crib/crate salvage are Jolt rigid bodies.
 
 This is not a claim of GDD §16 completeness, co-rotational beams, or

@@ -35,13 +35,19 @@ not a second gameplay simulation of the coupling cell.
 
 ## Current fidelity boundary
 
-Bay 07 is now an inhabited first-person location around the same lumped
+Bay 07 is an inhabited first-person location around one lumped
 three-body coupling cell. Off-axis loading, persistent plastic set, monotone
 damage, finite pressure inventory, and gate misalignment remain authoritative.
 
-The lumped cell is scaled so a player can stand in the bay. It does not yet
-satisfy the finished GDD's co-rotational beam, shell, contact, fracture-energy,
-or adaptive reduction acceptance criteria.
+The hoist is no longer a kinematic cheat. Unstretched cable length is state.
+Winch payout changes length; it does not teleport the load. Tension is
+`max(0, k·extension + c·rate)` — a slack cable does not push the frame.
+The hoist brake has a rated holding capacity with thermal derate; overload
+slips, pays out, and heats. Act I local competence is derived from
+`gallery_passable`, `neck_walk_clear`, and `carrier_at_recv`.
+
+The lumped cell does not yet satisfy the finished GDD's co-rotational beam,
+shell, contact, fracture-energy, or adaptive reduction acceptance criteria.
 
 Those claims remain unavailable until their versioned reference cases pass.
 

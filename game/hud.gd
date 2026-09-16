@@ -24,6 +24,7 @@ var _move_origin := Vector2.ZERO
 
 var _hint: Label
 var _inspect: Label
+var _objective: Label
 var _action: Button
 var _jump: Button
 var _crouch: Button
@@ -55,9 +56,20 @@ func _build() -> void:
 	_inspect = Label.new()
 	_inspect.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	_inspect.position = Vector2(28, -96)
+	_inspect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_inspect.add_theme_font_size_override("font_size", 15)
 	_inspect.add_theme_color_override("font_color", Color(0.72, 0.78, 0.74, 0.92))
 	root.add_child(_inspect)
+
+	_objective = Label.new()
+	_objective.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_objective.position = Vector2(-560, 24)
+	_objective.custom_minimum_size = Vector2(530, 40)
+	_objective.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_objective.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_objective.add_theme_font_size_override("font_size", 16)
+	_objective.add_theme_color_override("font_color", Color(0.78, 0.74, 0.62, 0.95))
+	root.add_child(_objective)
 
 	_dead = Label.new()
 	_dead.set_anchors_preset(Control.PRESET_CENTER)
@@ -136,7 +148,7 @@ func _fab(text: String, corner: Vector2) -> Button:
 	return b
 
 
-func set_state(p_hint: String, p_inspect: String, kind: String, p_hurt: bool, p_dead: bool) -> void:
+func set_state(p_hint: String, p_inspect: String, kind: String, p_hurt: bool, p_dead: bool, p_objective: String = "") -> void:
 	hint = p_hint
 	inspect_line = p_inspect
 	operate_kind = kind
@@ -144,6 +156,7 @@ func set_state(p_hint: String, p_inspect: String, kind: String, p_hurt: bool, p_
 	dead = p_dead
 	_hint.text = hint
 	_inspect.text = inspect_line
+	_objective.text = p_objective
 	_action.text = hint if hint != "" else "ACTION"
 	_action.modulate = Color(1, 1, 1, 1) if hint != "" else Color(1, 1, 1, 0.35)
 	_dead.visible = dead
