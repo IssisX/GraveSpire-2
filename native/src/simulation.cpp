@@ -43,9 +43,10 @@ constexpr double kSpireLiftContactM = 58.0;
 constexpr double kBridgeLatchTravelM = 0.12;
 constexpr double kBridgeLatchOverCenterM = 0.035;
 constexpr double kBridgeLatchClearM = 0.055;
-constexpr double kBridgeLatchK = 1.6e5;
-constexpr double kBridgeLatchC = 7.5e3;
-constexpr double kBridgeLatchDetentK = 9.0e4;
+constexpr double kBridgeLatchK = 8.0e3;
+constexpr double kBridgeLatchC = 1.2e3;
+constexpr double kBridgeLatchDetentK = 5.0e3;
+constexpr double kBridgeLatchMassKg = 120.0;
 constexpr double kBridgeMassKg = 48000.0;
 constexpr double kBridgeLengthM = 20.0;
 constexpr double kBridgeCounterKg = 20000.0;
@@ -71,9 +72,10 @@ constexpr double kSkyTopContactM = 68.0;
 constexpr double kWindLatchTravelM = 0.12;
 constexpr double kWindLatchOverCenterM = 0.035;
 constexpr double kWindLatchClearM = 0.055;
-constexpr double kWindLatchK = 1.6e5;
-constexpr double kWindLatchC = 7.5e3;
-constexpr double kWindLatchDetentK = 9.0e4;
+constexpr double kWindLatchK = 8.0e3;
+constexpr double kWindLatchC = 1.2e3;
+constexpr double kWindLatchDetentK = 5.0e3;
+constexpr double kWindLatchMassKg = 120.0;
 constexpr double kWindCarKg = 20000.0;
 constexpr double kWindCounterKg = 15000.0;
 constexpr double kWindCarDamping = 11000.0;
@@ -320,12 +322,13 @@ void Simulation::step_spire(double dt) {
   const double latch_contact =
       kBridgeLatchK * (latch_target - s.bridge_latch_m) +
       kBridgeLatchC * (latch_target_v - s.bridge_latch_velocity_mps);
-  s.bridge_latch_velocity_mps += latch_contact / 30.0 * dt;
+  s.bridge_latch_velocity_mps += latch_contact / kBridgeLatchMassKg * dt;
   s.bridge_latch_m += s.bridge_latch_velocity_mps * dt;
   const double bridge_detent_target =
       s.bridge_latch_m >= kBridgeLatchOverCenterM ? kBridgeLatchTravelM : 0.0;
   s.bridge_latch_velocity_mps +=
-      kBridgeLatchDetentK * (bridge_detent_target - s.bridge_latch_m) / 30.0 * dt;
+      kBridgeLatchDetentK * (bridge_detent_target - s.bridge_latch_m) /
+      kBridgeLatchMassKg * dt;
   s.bridge_latch_m = std::clamp(s.bridge_latch_m, 0.0, kBridgeLatchTravelM);
   if (latch_contact > 0.0) lift_force -= latch_contact * 0.12;
 
@@ -405,12 +408,13 @@ void Simulation::step_spire(double dt) {
   const double wind_latch_contact =
       kWindLatchK * (wind_latch_target - s.wind_latch_m) +
       kWindLatchC * (wind_latch_target_v - s.wind_latch_velocity_mps);
-  s.wind_latch_velocity_mps += wind_latch_contact / 30.0 * dt;
+  s.wind_latch_velocity_mps += wind_latch_contact / kWindLatchMassKg * dt;
   s.wind_latch_m += s.wind_latch_velocity_mps * dt;
   const double wind_detent_target =
       s.wind_latch_m >= kWindLatchOverCenterM ? kWindLatchTravelM : 0.0;
   s.wind_latch_velocity_mps +=
-      kWindLatchDetentK * (wind_detent_target - s.wind_latch_m) / 30.0 * dt;
+      kWindLatchDetentK * (wind_detent_target - s.wind_latch_m) /
+      kWindLatchMassKg * dt;
   s.wind_latch_m = std::clamp(s.wind_latch_m, 0.0, kWindLatchTravelM);
   if (wind_latch_contact > 0.0) sky_force -= wind_latch_contact * 0.12;
 
