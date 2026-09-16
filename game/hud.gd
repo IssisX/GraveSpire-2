@@ -169,7 +169,7 @@ func _rebuild_ops(kind: String) -> void:
 		b.text = d[0]
 		b.custom_minimum_size = Vector2(88, 64)
 		var action: StringName = StringName(d[1])
-		var pulse := d[1] in ["carrier_brake", "frame_brace", "frame_cut_brace", "gate_wedge"]
+		var pulse: bool = String(d[1]) in ["carrier_brake", "frame_brace", "frame_cut_brace", "gate_wedge"]
 		if pulse:
 			b.pressed.connect(func():
 				operate.emit(action, true)

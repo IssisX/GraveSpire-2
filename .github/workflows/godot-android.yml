@@ -78,6 +78,12 @@ jobs:
           ls -lh game/bin/
           test -f game/bin/libgravespire.android.template_debug.arm64.so
 
+      - name: Build Linux GDExtension (editor host during export)
+        run: |
+          set -euo pipefail
+          scons api_version=4.7 platform=linux target=template_debug -j"$(nproc)"
+          test -f game/bin/libgravespire.linux.template_debug.x86_64.so
+
       - name: Download Godot 4.7.2 and export templates
         run: |
           set -euo pipefail
@@ -129,8 +135,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ../build
-          "$GODOT_BIN" --headless --path . --import || true
-          "$GODOT_BIN" --headless --path . --export-debug "Android" ../build/GRAVESPIRE-android-debug.apk
+          ls -lh bin/
+          "$GODOT_BIN" --version || true
+          "$GODOT_BIN" --headless --path . --import --quit || true
+          "$GODOT_BIN" --headless --path . --verbose --export-debug "Android" ../build/GRAVESPIRE-android-debug.apk
           ls -lh ../build || true
           test -f ../build/GRAVESPIRE-android-debug.apk
           test -s ../build/GRAVESPIRE-android-debug.apk

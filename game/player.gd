@@ -50,7 +50,7 @@ func _ready() -> void:
 	floor_max_angle = deg_to_rad(52.0)
 	floor_snap_length = 0.22
 	safe_margin = 0.07
-	platform_on_leave = CharacterBody3D.PLATFORM_ON_LEAVE_KEEP_VELOCITY
+	platform_on_leave = CharacterBody3D.PLATFORM_ON_LEAVE_ADD_VELOCITY
 	up_direction = Vector3.UP
 	collision_layer = 2
 	collision_mask = 1
@@ -212,7 +212,7 @@ func _try_mantle() -> bool:
 	var hit := space.intersect_ray(q)
 	if hit.is_empty():
 		return false
-	var probe := hit.position + fwd * 0.18 + Vector3(0.0, 1.38, 0.0)
+	var probe: Vector3 = hit.position + fwd * 0.18 + Vector3(0.0, 1.38, 0.0)
 	var down := PhysicsRayQueryParameters3D.create(probe, probe + Vector3(0.0, -1.2, 0.0))
 	down.exclude = [get_rid()]
 	down.collision_mask = 1

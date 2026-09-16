@@ -30,6 +30,7 @@ jolt_physics_3d/simulation/position_steps=2
 
 renderer/rendering_method="mobile"
 renderer/rendering_method.mobile="mobile"
+textures/vram_compression/import_etc2_astc=true
 textures/default_filters/use_nearest_mipmap_filter=false
 environment/defaults/default_clear_color=Color(0.012, 0.016, 0.019, 1)
 

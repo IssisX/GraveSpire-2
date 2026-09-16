@@ -193,7 +193,7 @@ func _context(state: Dictionary) -> void:
 	q.exclude = [player.get_rid()]
 	var hit := space.intersect_ray(q)
 	if not hit.is_empty():
-		var n: Node = hit.collider
+		var n := hit.collider as Node
 		if n != null:
 			look_id = str(n.get_meta("station", ""))
 			if look_id == "" and hit.position.y - player.global_position.y > 0.5:
