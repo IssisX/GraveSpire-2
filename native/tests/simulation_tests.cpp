@@ -162,10 +162,8 @@ int main() {
   payout.set_command(Command::CarrierBrake, true);
   payout.set_command(Command::CarrierLower, true);
   payout.advance_authority_tick();
-  const double dL =
-      payout.state().freight.cable_unstretched_m - L_pay0;
-  const double dh =
-      std::abs(payout.state().freight.height_m - h_pay0);
+  const double dL = payout.state().freight.cable_unstretched_m - L_pay0;
+  const double dh = std::abs(payout.state().freight.height_m - h_pay0);
   require(dL > 0.002, "lower must increase unstretched length");
   require(dh < 0.6 * dL,
           "winch payout must not teleport the load in the same step");
@@ -218,6 +216,57 @@ int main() {
           "local competence is recv envelope plus a physically open shop route");
   require(competence.finite(), "competence sequence must remain finite");
 
-  std::cout << "PASS: coupled freight/frame/gate reference cases\n";
+  // Native vertical-spire chain: drive lift -> retract latch -> gravity bridge.
+  Simulation spire;
+  spire.set_command(Command::SpireLiftUp, true);
+  run_ticks(spire, 900);
+  spire.set_command(Command::SpireLiftUp, false);
+  run_ticks(spire, 180);
+  require(spire.state().spire.lift_q_m > 59.5,
+          "finite traction drive must carry the exterior lift to the upper landing");
+  require(spire.state().spire.bridge_latch_m > 0.055,
+          "lift arrival must physically carry the bridge latch beyond clear");
+  require(spire.spire_bridge_walkable(),
+          "released gravity bascule must settle into a traversable bridge");
+
+  // Ballast transfer is finite motion; only loaded counterweight raises the sky car.
+  spire.set_command(Command::SkyBallastRight, true);
+  run_ticks(spire, 240);
+  spire.set_command(Command::SkyBallastRight, false);
+  require(spire.spire_sky_ballast_loaded(),
+          "finite-speed ballast trolley must reach the counterweight support");
+  spire.set_command(Command::SkyCarBrake, true);
+  spire.set_command(Command::SkyCarBrake, false);
+  run_ticks(spire, 1200);
+  require(spire.state().spire.sky_car_q_m > 68.0,
+          "loaded counterweight must raise the player-carrying sky car");
+  require(spire.spire_wind_unlocked(),
+          "sky-car arrival must physically clear the wind ascender latch");
+
+  // Wind supplies real finite work only after the latch is clear and brake released.
+  spire.set_command(Command::WindCarBrake, true);
+  spire.set_command(Command::WindCarBrake, false);
+  run_ticks(spire, 1500);
+  require(spire.state().spire.wind_car_q_m > 95.0,
+          "building-scale wind load must lift the exposed wind car into cloud level");
+  require(spire.finite(), "full Bay 07 -> exterior spire causal chain must remain finite");
+
+  // Determinism extends through the new native spire coordinates.
+  Simulation spire_a;
+  Simulation spire_b;
+  for (Simulation* sim : {&spire_a, &spire_b}) {
+    sim->set_command(Command::SpireLiftUp, true);
+    run_ticks(*sim, 360);
+    sim->set_command(Command::SpireLiftUp, false);
+    sim->set_command(Command::SkyBallastRight, true);
+    run_ticks(*sim, 120);
+    sim->set_command(Command::SkyBallastRight, false);
+  }
+  require(spire_a.state().spire.lift_q_m == spire_b.state().spire.lift_q_m &&
+              spire_a.state().spire.sky_ballast_x_m ==
+                  spire_b.state().spire.sky_ballast_x_m,
+          "identical spire commands must reproduce authoritative coordinates");
+
+  std::cout << "PASS: Bay 07 + native vertical-spire reference cases\n";
   return EXIT_SUCCESS;
 }
